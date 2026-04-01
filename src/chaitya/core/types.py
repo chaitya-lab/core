@@ -340,6 +340,7 @@ class CommandSpec:
     name: str
     description: str = ""
     params: list[CommandParam] = field(default_factory=list)
+    examples: list[str] = field(default_factory=list)
     output_type: str = "text/plain"
     supports_dry_run: bool = False
 
