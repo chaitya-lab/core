@@ -23,6 +23,7 @@ import sys
 from pathlib import Path
 
 from chaitya.core import __version__
+from chaitya.core.config import load_config
 from chaitya.core.kernel import Kernel
 from chaitya.core.types import KernelBootError
 
@@ -97,8 +98,14 @@ async def _run(cli_name: str, args: list[str]) -> int:
     # Build command expression — empty means "info"
     expression = " ".join(filtered_args) if filtered_args else "info"
 
-    # Boot kernel
-    kernel = Kernel(db_path=db_path, cli_name=cli_name)
+    # Load config (YAML + env) then apply CLI flag overrides
+    config = load_config()
+    kernel = Kernel.from_config(config)
+    # Override from CLI flags
+    if db_path != _resolve_db_path():
+        kernel = Kernel(config=config, db_path=db_path, cli_name=cli_name)
+    elif cli_name != config.kernel.cli_name:
+        kernel = Kernel(config=config, db_path=config.store.path or ":memory:", cli_name=cli_name)
 
     try:
         await kernel.boot()

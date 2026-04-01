@@ -23,6 +23,7 @@ from typing import Any
 
 from chaitya.core import __version__
 from chaitya.core.backends.local import LocalProcessBackend
+from chaitya.core.config import CoreConfig, load_config
 from chaitya.core.event_bus import SqliteEventBus
 from chaitya.core.pipeline import AdapterHandler, PipelineOrchestrator
 from chaitya.core.registry import AdapterRegistry
@@ -67,6 +68,7 @@ class Kernel:
     def __init__(
         self,
         *,
+        config: CoreConfig | None = None,
         db_path: str | Path = ":memory:",
         cli_name: str = "chaitya",
         system_adapters: frozenset[str] | None = None,
@@ -75,6 +77,7 @@ class Kernel:
         max_events_per_second: int = 1000,
         max_log_size_bytes: int = 1_073_741_824,
     ) -> None:
+        self._config = config
         self.cli_name = cli_name
         self._system_adapters = system_adapters or DEFAULT_SYSTEM_ADAPTERS
         self._booted = False
@@ -97,6 +100,20 @@ class Kernel:
         )
         self._pipeline = PipelineOrchestrator(overflow_dir=overflow_dir)
         self._registry = AdapterRegistry()
+
+    @classmethod
+    def from_config(cls, config: CoreConfig) -> "Kernel":
+        """Create a Kernel from a CoreConfig object."""
+        return cls(
+            config=config,
+            db_path=config.store.path or ":memory:",
+            cli_name=config.kernel.cli_name,
+            system_adapters=frozenset(config.system_adapters),
+            overflow_dir=config.kernel.tmp_dir or None,
+            stuck_threshold_seconds=config.session.stuck_threshold_seconds,
+            max_events_per_second=config.store.max_events_per_second,
+            max_log_size_bytes=config.store.max_log_size_bytes,
+        )
 
     # -- Public properties --
 
