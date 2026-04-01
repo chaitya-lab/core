@@ -96,8 +96,8 @@ class TestShutdown:
 
     async def test_uptime(self, kernel: Kernel) -> None:
         import asyncio
-        await asyncio.sleep(0.01)
-        assert kernel.uptime_seconds > 0
+        await asyncio.sleep(0.05)  # 50ms — enough even on Windows
+        assert kernel.uptime_seconds >= 0.01
 
 
 # ---------------------------------------------------------------------------
