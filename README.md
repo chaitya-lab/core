@@ -12,7 +12,7 @@ The kernel has exactly seven responsibilities:
 
 1. **Boot Sequence** — deterministic startup with clear failure modes
 2. **Command Dispatch** — routes `chaitya <adapter> <subcommand>` to registered adapters
-3. **Session Management** — named running environments backed by tmux (Mac/Linux)
+3. **Session Management** — named running environments behind a `SessionBackend` protocol
 4. **Event Bus** — JSON-line event routing between adapters (SQLite-backed pub/sub)
 5. **Pipeline Mechanics** — L0 (ingest) → L1 (execute) → L2 (present) data flow
 6. **Adapter Registry** — discovers, validates, loads Python adapter packages
@@ -32,10 +32,19 @@ The kernel routes. Adapters act. The kernel has **zero built-in commands** — a
 ```bash
 # Install from source
 pip install -e ".[dev]"
+pip install -e ./sdk
+
+# Run the default suite
+python3 -m pytest tests -q
+
+# Run the real tmux integration suite on macOS/Linux
+CHAITYA_RUN_TMUX_TESTS=1 python3 -m pytest tests/test_tmux_backend.py -q
 
 # Run (no adapters installed = functional but empty)
 chaitya info
 ```
+
+Current status: macOS/Linux use a real `tmux` backend by default when `tmux` is available. `LocalProcessBackend` remains in-tree for fallback and focused unit testing.
 
 ## For Adapter Developers
 
@@ -72,6 +81,7 @@ src/chaitya/core/     # The kernel
 sdk/                  # chaitya-sdk package (separate pip install)
 tests/                # Test suite
 docs/                 # Documentation
+adaptors/             # Future first-party and community adaptor workspace
 ```
 
 ## Five Extension Points
@@ -80,7 +90,7 @@ All swappable via `core.yaml`:
 
 | Protocol | Default | Purpose |
 |---|---|---|
-| `SessionBackend` | tmux | Named session management |
+| `SessionBackend` | tmux on macOS/Linux, local fallback elsewhere | Named session management |
 | `EventBus` | SQLite | Pub/sub event routing |
 | `Store` | SQLite | Session records + event log |
 | `PipelineOrchestrator` | Built-in | L0→L1→L2 data flow |
@@ -88,9 +98,8 @@ All swappable via `core.yaml`:
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, coding standards, and contribution guidelines.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, coding standards, and contribution guidelines. Adapter authors should also read [docs/adapters-dev.md](docs/adapters-dev.md). Repository direction for future packages lives in [ROADMAP.md](ROADMAP.md) and [adaptors/README.md](adaptors/README.md).
 
 ## License
 
 [MIT](LICENSE)
-
