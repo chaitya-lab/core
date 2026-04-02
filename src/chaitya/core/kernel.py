@@ -536,6 +536,81 @@ class Kernel:
             except Exception as exc:
                 return str(exc).encode("utf-8"), 1
 
+        if sub == "send-input":
+            name = ctx.env.get("name") or (positional[0] if positional else "")
+            if not name:
+                return b"Usage: session send-input <name> <text>|--newline|--key <key>", 1
+            raw_text = positional[1] if len(positional) > 1 else ""
+            newline = bool(ctx.env.get("newline"))
+            key = str(ctx.env.get("key", "")).lower()
+            if key:
+                key_map = {
+                    "enter": b"\n",
+                    "return": b"\n",
+                    "tab": b"\t",
+                    "space": b" ",
+                }
+                data = key_map.get(key)
+                if data is None:
+                    return f"Unsupported key: {key}".encode("utf-8"), 1
+            else:
+                data = raw_text.encode("utf-8")
+                if newline:
+                    data += b"\n"
+            try:
+                await self._session_mgr.send_input(name, data)
+                return f"Input sent to session '{name}'.".encode("utf-8"), 0
+            except Exception as exc:
+                return str(exc).encode("utf-8"), 1
+
+        if sub == "output":
+            name = ctx.env.get("name") or (positional[0] if positional else "")
+            if not name:
+                return b"Usage: session output <name> [--idle-timeout 0.2]", 1
+            idle_timeout = float(ctx.env.get("idle-timeout", "0.2"))
+            try:
+                output = await self._session_mgr.read_output(
+                    name,
+                    idle_timeout_seconds=idle_timeout,
+                )
+                return output, 0
+            except Exception as exc:
+                return str(exc).encode("utf-8"), 1
+
+        if sub == "signal":
+            name = ctx.env.get("name") or (positional[0] if positional else "")
+            sig = ctx.env.get("sig") or ctx.env.get("signal") or (positional[1] if len(positional) > 1 else "")
+            if not name or not sig:
+                return b"Usage: session signal <name> <signal>", 1
+            try:
+                await self._session_mgr.signal(name, str(sig))
+                return f"Signal {sig} sent to session '{name}'.".encode("utf-8"), 0
+            except Exception as exc:
+                return str(exc).encode("utf-8"), 1
+
+        if sub == "set-env":
+            name = ctx.env.get("name") or (positional[0] if positional else "")
+            pair = positional[1] if len(positional) > 1 else ""
+            if not name or "=" not in pair:
+                return b"Usage: session set-env <name> KEY=VALUE", 1
+            key, value = pair.split("=", 1)
+            try:
+                await self._session_mgr.set_env(name, key, value)
+                return f"Environment set for session '{name}': {key}".encode("utf-8"), 0
+            except Exception as exc:
+                return str(exc).encode("utf-8"), 1
+
+        if sub == "unset-env":
+            name = ctx.env.get("name") or (positional[0] if positional else "")
+            key = positional[1] if len(positional) > 1 else ""
+            if not name or not key:
+                return b"Usage: session unset-env <name> KEY", 1
+            try:
+                await self._session_mgr.unset_env(name, key)
+                return f"Environment removed for session '{name}': {key}".encode("utf-8"), 0
+            except Exception as exc:
+                return str(exc).encode("utf-8"), 1
+
         if sub == "kill":
             name = ctx.env.get("name") or (positional[0] if positional else "")
             if not name:
@@ -564,14 +639,24 @@ class Kernel:
         self, input_stream: ChaityaStream, ctx: PipelineContext
     ) -> tuple[bytes, int]:
         """Handle ``watch <options>`` — subscribe to events."""
-        sub = ctx.env.get("__subcommand__", "")
-        # Simple: return recent events
-        events = await self._event_bus.history(EventFilter(limit=20))
+        event_types = None
+        if ctx.env.get("on"):
+            event_types = [str(ctx.env["on"])]
+        session_id = ctx.env.get("session")
+        limit = int(str(ctx.env.get("limit", "20")))
+        events = await self._event_bus.history(
+            EventFilter(
+                event_types=event_types,
+                session_id=str(session_id) if session_id else None,
+                limit=limit,
+            )
+        )
         if not events:
             return b"No events recorded.", 0
         lines = []
         for ev in events:
-            lines.append(f"[{ev.timestamp}] {ev.type}: {ev.payload}")
+            scope = f" session={ev.session_id}" if ev.session_id else ""
+            lines.append(f"[{ev.timestamp}] {ev.type}{scope}: {ev.payload}")
         return "\n".join(lines).encode("utf-8"), 0
 
     async def _handle_registry(

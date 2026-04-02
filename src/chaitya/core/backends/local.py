@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import shlex
 import signal
 import sys
 from collections.abc import AsyncIterator
@@ -165,12 +166,20 @@ class LocalProcessBackend:
         session = self._require(name)
         session.env[key] = value
         session.identity.env_vars[key] = value
+        if session.process.stdin is not None:
+            session.process.stdin.write(
+                f"export {key}={shlex.quote(value)}\n".encode("utf-8")
+            )
+            await session.process.stdin.drain()
 
     async def unset_env(self, name: str, key: str) -> None:
         """Remove an environment variable."""
         session = self._require(name)
         session.env.pop(key, None)
         session.identity.env_vars.pop(key, None)
+        if session.process.stdin is not None:
+            session.process.stdin.write(f"unset {key}\n".encode("utf-8"))
+            await session.process.stdin.drain()
 
     def _require(self, name: str) -> _LocalSession:
         """Get session or raise."""
@@ -178,4 +187,3 @@ class LocalProcessBackend:
         if session is None:
             raise ValueError(f"Session {name!r} not found")
         return session
-

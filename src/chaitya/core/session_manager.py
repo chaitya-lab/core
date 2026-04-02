@@ -198,9 +198,43 @@ class SessionManager:
 
     async def stream_output(self, name: str) -> AsyncIterator[bytes]:
         """Stream output from a session."""
-        async for chunk in await self._backend.stream_output(name):
+        async for chunk in self._backend.stream_output(name):
             self._touch(name)
             yield chunk
+
+    async def read_output(
+        self,
+        name: str,
+        *,
+        idle_timeout_seconds: float = 0.2,
+        max_chunks: int = 32,
+        max_bytes: int = 65_536,
+    ) -> bytes:
+        """Collect a bounded snapshot of session output.
+
+        Reads from the backend stream until it goes idle for ``idle_timeout_seconds``
+        or one of the safety limits is reached.
+        """
+        iterator = self.stream_output(name).__aiter__()
+        chunks: list[bytes] = []
+        total_bytes = 0
+
+        while len(chunks) < max_chunks and total_bytes < max_bytes:
+            try:
+                chunk = await asyncio.wait_for(
+                    iterator.__anext__(),
+                    timeout=idle_timeout_seconds,
+                )
+            except asyncio.TimeoutError:
+                break
+            except StopAsyncIteration:
+                break
+            chunks.append(chunk)
+            total_bytes += len(chunk)
+            if total_bytes >= max_bytes:
+                break
+
+        return b"".join(chunks)
 
     async def update_state(self, name: str, new_state: SessionState) -> None:
         """Update a session's state (used by pipeline orchestrator)."""
@@ -256,4 +290,3 @@ class SessionManager:
                         logger.warning(
                             "Session %s stuck (%ds idle)", name, int(elapsed)
                         )
-

@@ -186,3 +186,49 @@ class TestDispatch:
             assert "hello" in read.processed
         finally:
             await kernel.shutdown()
+
+    async def test_session_send_input_and_output_roundtrip(self) -> None:
+        kernel = Kernel(
+            db_path=":memory:",
+            session_backend="local",
+            system_adapters=frozenset(),
+        )
+        await kernel.boot()
+        try:
+            created = await kernel.dispatch("session create loop")
+            assert created.exit_code == 0
+
+            first = await kernel.dispatch('session send-input loop "read X" --newline')
+            assert first.exit_code == 0
+            second = await kernel.dispatch('session send-input loop "muku" --newline')
+            assert second.exit_code == 0
+            third = await kernel.dispatch('session send-input loop "echo ACK:$X" --newline')
+            assert third.exit_code == 0
+
+            output = await kernel.dispatch("session output loop")
+            assert output.exit_code == 0
+            assert "ACK:muku" in output.processed
+        finally:
+            await kernel.shutdown()
+
+    async def test_session_set_env_and_watch(self) -> None:
+        kernel = Kernel(
+            db_path=":memory:",
+            session_backend="local",
+            system_adapters=frozenset(),
+        )
+        await kernel.boot()
+        try:
+            await kernel.dispatch("session create envloop")
+            set_env = await kernel.dispatch("session set-env envloop GREETING=hello")
+            assert set_env.exit_code == 0
+            await kernel.dispatch('session send-input envloop "echo $GREETING" --newline')
+            output = await kernel.dispatch("session output envloop")
+            assert "hello" in output.processed
+
+            watched = await kernel.dispatch("watch --session envloop --on session_created --limit 5")
+            assert watched.exit_code == 0
+            assert "session_created" in watched.processed
+            assert "envloop" in watched.processed
+        finally:
+            await kernel.shutdown()
