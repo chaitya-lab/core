@@ -23,6 +23,7 @@ from typing import Any
 
 from chaitya.core import __version__
 from chaitya.core.backends.local import LocalProcessBackend
+from chaitya.core.backends.tmux import TmuxSessionBackend
 from chaitya.core.config import CoreConfig, load_config
 from chaitya.core.event_bus import SqliteEventBus
 from chaitya.core.pipeline import AdapterHandler, PipelineOrchestrator
@@ -71,6 +72,7 @@ class Kernel:
         config: CoreConfig | None = None,
         db_path: str | Path = ":memory:",
         cli_name: str = "chaitya",
+        session_backend: str = "local",
         system_adapters: frozenset[str] | None = None,
         overflow_dir: str | None = None,
         stuck_threshold_seconds: int = 60,
@@ -91,7 +93,7 @@ class Kernel:
             max_log_size_bytes=max_log_size_bytes,
         )
         self._event_bus: SqliteEventBus = self._store.event_bus
-        self._backend = LocalProcessBackend()
+        self._backend = self._build_session_backend(session_backend)
         self._session_mgr = SessionManager(
             backend=self._backend,
             store=self._store,
@@ -108,11 +110,24 @@ class Kernel:
             config=config,
             db_path=config.store.path or ":memory:",
             cli_name=config.kernel.cli_name,
+            session_backend=config.session.backend,
             system_adapters=frozenset(config.system_adapters),
             overflow_dir=config.kernel.tmp_dir or None,
             stuck_threshold_seconds=config.session.stuck_threshold_seconds,
             max_events_per_second=config.store.max_events_per_second,
             max_log_size_bytes=config.store.max_log_size_bytes,
+        )
+
+    @staticmethod
+    def _build_session_backend(session_backend: str) -> Any:
+        backend = session_backend.strip().lower()
+        if backend == "local":
+            return LocalProcessBackend()
+        if backend == "tmux":
+            return TmuxSessionBackend()
+        raise ValueError(
+            f"Unsupported session backend {session_backend!r}. "
+            "Supported backends: local, tmux."
         )
 
     # -- Public properties --
@@ -300,20 +315,7 @@ class Kernel:
 
         chain = self._pipeline.parse_chain(expression)
         ctx = PipelineContext()
-
-        # Collect output from the pipeline
-        final_output: CommandOutput | None = None
-        async for chunk in self._pipeline.execute(chain, ctx):
-            if chunk.is_final:
-                final_output = CommandOutput(
-                    processed=chunk.data.decode("utf-8", errors="replace"),
-                    exit_code=0,
-                )
-
-        if final_output is None:
-            final_output = CommandOutput(processed="", exit_code=0)
-
-        return final_output
+        return await self._pipeline.run(chain, ctx)
 
     # -- Kernel Command Handlers (PRD §5) --
 
@@ -390,6 +392,7 @@ class Kernel:
     ) -> tuple[bytes, int]:
         """Handle ``session <subcommand>``."""
         sub = ctx.env.get("__subcommand__", "list")
+        positional = ctx.env.get("__args__", [])
 
         if sub == "list":
             records = await self._store.list_sessions()
@@ -401,7 +404,7 @@ class Kernel:
             return "\n".join(lines).encode("utf-8"), 0
 
         if sub == "status":
-            name = ctx.env.get("name", "")
+            name = ctx.env.get("name") or (positional[0] if positional else "")
             if not name:
                 return b"Usage: session status <name>", 1
             rec = await self._store.get_session(name)
@@ -415,20 +418,17 @@ class Kernel:
             return "\n".join(lines).encode("utf-8"), 0
 
         if sub == "create":
-            name = ctx.env.get("name", "")
+            name = ctx.env.get("name") or (positional[0] if positional else "")
             if not name:
                 return b"Usage: session create <name>", 1
             try:
-                handle = await self._session_mgr.create(
-                    name=name,
-                    command=ctx.env.get("command", ""),
-                )
+                await self._session_mgr.create(name=name)
                 return f"Session '{name}' created.".encode("utf-8"), 0
             except Exception as exc:
                 return str(exc).encode("utf-8"), 1
 
         if sub == "kill":
-            name = ctx.env.get("name", "")
+            name = ctx.env.get("name") or (positional[0] if positional else "")
             if not name:
                 return b"Usage: session kill <name>", 1
             try:
@@ -470,6 +470,7 @@ class Kernel:
     ) -> tuple[bytes, int]:
         """Handle ``registry <subcommand>``."""
         sub = ctx.env.get("__subcommand__", "list")
+        positional = ctx.env.get("__args__", [])
 
         if sub == "list":
             adapters = self._registry.loaded_adapters
@@ -483,7 +484,7 @@ class Kernel:
             return "\n".join(lines).encode("utf-8"), 0
 
         if sub == "validate":
-            name = ctx.env.get("name", "")
+            name = ctx.env.get("name") or (positional[0] if positional else "")
             pkg = self._registry.get_adapter(name)
             if pkg is None:
                 return f"Adapter '{name}' not found.".encode("utf-8"), 1

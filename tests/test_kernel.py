@@ -130,9 +130,24 @@ class TestDispatch:
         result = await kernel.dispatch("watch")
         assert isinstance(result, CommandOutput)
 
+    async def test_dispatch_preserves_nonzero_exit_code(self, kernel: Kernel) -> None:
+        result = await kernel.dispatch("registry validate missing-adapter")
+        assert result.exit_code == 1
+
+    async def test_dispatch_session_create_uses_positional_name(
+        self, kernel: Kernel
+    ) -> None:
+        result = await kernel.dispatch("session create mac-dev")
+        assert result.exit_code == 0
+        status = await kernel.dispatch("session status mac-dev")
+        assert "Name: mac-dev" in status.processed
+
     async def test_dispatch_unknown_adapter(self, kernel: Kernel) -> None:
         result = await kernel.dispatch("nonexistent doSomething")
         assert isinstance(result, CommandOutput)
         # Should contain error about unknown adapter
-        assert "nonexistent" in result.processed.lower() or result.exit_code != 0 or "error" in result.processed.lower()
-
+        assert (
+            "nonexistent" in result.processed.lower()
+            or result.exit_code != 0
+            or "error" in result.processed.lower()
+        )

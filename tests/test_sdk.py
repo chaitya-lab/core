@@ -222,9 +222,7 @@ class TestEventBusProxy:
     def test_emit_without_bus_raises(self):
         proxy = EventBusProxy()
         with pytest.raises(RuntimeError, match="not available"):
-            asyncio.get_event_loop().run_until_complete(
-                proxy.emit(Event(type="test"))
-            )
+            asyncio.run(proxy.emit(Event(type="test")))
 
     def test_emit_with_no_permission_raises(self):
         proxy = EventBusProxy()
@@ -243,9 +241,7 @@ class TestEventBusProxy:
             AdapterPermissions(can_emit_events=False),
         )
         with pytest.raises(PermissionDenied):
-            asyncio.get_event_loop().run_until_complete(
-                proxy.emit(Event(type="test"))
-            )
+            asyncio.run(proxy.emit(Event(type="test")))
 
     def test_emit_with_permission_succeeds(self):
         proxy = EventBusProxy()
@@ -264,8 +260,6 @@ class TestEventBusProxy:
             "my_adapter",
             AdapterPermissions(can_emit_events=True),
         )
-        asyncio.get_event_loop().run_until_complete(
-            proxy.emit(Event(type="hello"))
-        )
+        asyncio.run(proxy.emit(Event(type="hello")))
         assert len(emitted) == 1
         assert emitted[0].type == "hello"

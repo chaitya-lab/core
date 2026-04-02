@@ -367,6 +367,88 @@ class PipelineOrchestrator:
         """Parse a command expression into a structured chain."""
         return parse_chain(expression)
 
+    async def run(self, chain: CommandChain, ctx: PipelineContext) -> CommandOutput:
+        """Execute a command chain and return the final L2 output."""
+        if not chain.steps:
+            return CommandOutput()
+
+        # Build initial input stream from context
+        current_input = ctx.input_stream or ChaityaStream()
+        accumulated_stdout = bytearray()
+        accumulated_stderr = bytearray()
+        last_exit_code = 0
+        start_time = time.monotonic()
+        skip_next = False
+
+        for cmd, operator in chain.steps:
+            # If a previous OR short-circuited, skip this command
+            if skip_next:
+                skip_next = False
+                continue
+
+            handler = self._handlers.get(cmd.adapter)
+            if handler is None:
+                err_msg = (
+                    f"No handler registered for adapter {cmd.adapter!r}. "
+                    f"Available adapters: {', '.join(sorted(self._handlers)) or '(none)'}. "
+                    f"Use 'info' to discover adapters."
+                ).encode("utf-8")
+                accumulated_stderr.extend(err_msg)
+                last_exit_code = 127
+                if operator in (PipelineOperator.AND, PipelineOperator.PIPE):
+                    break
+                continue
+
+            step_ctx = PipelineContext(
+                session_id=ctx.session_id,
+                input_stream=current_input,
+                env=dict(ctx.env),
+                dry_run=ctx.dry_run,
+            )
+            step_ctx.env["__adapter__"] = cmd.adapter
+            step_ctx.env["__subcommand__"] = cmd.subcommand
+            step_ctx.env["__args__"] = list(cmd.raw_args)
+            step_ctx.env.update(cmd.args)
+
+            try:
+                output_bytes, exit_code = await handler(current_input, step_ctx)
+            except Exception as exc:
+                err_msg = f"Pipeline error in {cmd.adapter}.{cmd.subcommand}: {exc}"
+                logger.error(err_msg)
+                err_bytes = err_msg.encode("utf-8")
+                accumulated_stderr.extend(err_bytes)
+                last_exit_code = 1
+                if operator in (PipelineOperator.AND, PipelineOperator.PIPE):
+                    break
+                continue
+
+            last_exit_code = exit_code
+            accumulated_stdout.extend(output_bytes)
+
+            if operator == PipelineOperator.AND and exit_code != 0:
+                break
+            if operator == PipelineOperator.OR and exit_code == 0:
+                skip_next = True
+                continue
+            if operator == PipelineOperator.PIPE:
+                current_input = ChaityaStream(
+                    content=output_bytes,
+                    declared_type="application/octet-stream",
+                    size_bytes=len(output_bytes),
+                )
+            elif operator in (PipelineOperator.SEQUENCE, PipelineOperator.OR):
+                current_input = ctx.input_stream or ChaityaStream()
+
+        duration_ms = int((time.monotonic() - start_time) * 1000)
+        return apply_l2(
+            raw_output=bytes(accumulated_stdout),
+            stderr_output=bytes(accumulated_stderr),
+            exit_code=last_exit_code,
+            session_id=ctx.session_id,
+            duration_ms=duration_ms,
+            overflow_dir=self._overflow_dir,
+        )
+
     async def execute(
         self, chain: CommandChain, ctx: PipelineContext
     ) -> AsyncIterator[OutputChunk]:
@@ -383,7 +465,6 @@ class PipelineOrchestrator:
         if not chain.steps:
             return
 
-        # Build initial input stream from context
         current_input = ctx.input_stream or ChaityaStream()
         accumulated_stdout = bytearray()
         accumulated_stderr = bytearray()
@@ -391,8 +472,7 @@ class PipelineOrchestrator:
         start_time = time.monotonic()
         skip_next = False
 
-        for i, (cmd, operator) in enumerate(chain.steps):
-            # If a previous OR short-circuited, skip this command
+        for cmd, operator in chain.steps:
             if skip_next:
                 skip_next = False
                 continue
@@ -406,31 +486,21 @@ class PipelineOrchestrator:
                 ).encode("utf-8")
                 accumulated_stderr.extend(err_msg)
                 last_exit_code = 127
-                # Yield incremental error chunk
                 yield OutputChunk(data=err_msg, is_stderr=True)
-                # For AND: stop chain
-                if operator == PipelineOperator.AND:
+                if operator in (PipelineOperator.AND, PipelineOperator.PIPE):
                     break
-                # For OR: continue to next
-                if operator == PipelineOperator.OR:
-                    continue
-                # For PIPE: can't continue without output
-                if operator == PipelineOperator.PIPE:
-                    break
-                # SEQUENCE: continue
                 continue
 
-            # Prepare step-local context
             step_ctx = PipelineContext(
                 session_id=ctx.session_id,
                 input_stream=current_input,
                 env=dict(ctx.env),
                 dry_run=ctx.dry_run,
             )
-            # Merge command args into context env
-            step_ctx.env.update(
-                {k: str(v) for k, v in cmd.args.items() if isinstance(v, str)}
-            )
+            step_ctx.env["__adapter__"] = cmd.adapter
+            step_ctx.env["__subcommand__"] = cmd.subcommand
+            step_ctx.env["__args__"] = list(cmd.raw_args)
+            step_ctx.env.update(cmd.args)
 
             try:
                 output_bytes, exit_code = await handler(current_input, step_ctx)
@@ -441,42 +511,28 @@ class PipelineOrchestrator:
                 accumulated_stderr.extend(err_bytes)
                 last_exit_code = 1
                 yield OutputChunk(data=err_bytes, is_stderr=True)
-                if operator == PipelineOperator.AND:
-                    break
-                if operator == PipelineOperator.OR:
-                    continue
-                if operator == PipelineOperator.PIPE:
+                if operator in (PipelineOperator.AND, PipelineOperator.PIPE):
                     break
                 continue
 
             last_exit_code = exit_code
             accumulated_stdout.extend(output_bytes)
-
-            # Yield intermediate chunk (not final)
             yield OutputChunk(data=output_bytes, is_stderr=False, is_final=False)
 
-            # Operator-based flow control
             if operator == PipelineOperator.AND and exit_code != 0:
                 break
             if operator == PipelineOperator.OR and exit_code == 0:
-                # Skip next command (success means OR short-circuits)
                 skip_next = True
                 continue
             if operator == PipelineOperator.PIPE:
-                # Feed output as input to next command
                 current_input = ChaityaStream(
                     content=output_bytes,
                     declared_type="application/octet-stream",
                     size_bytes=len(output_bytes),
                 )
-            elif operator == PipelineOperator.SEQUENCE:
-                # Reset input for next independent command
-                current_input = ctx.input_stream or ChaityaStream()
-            elif operator == PipelineOperator.OR and exit_code != 0:
-                # Non-zero exit: OR should continue to next command
+            elif operator in (PipelineOperator.SEQUENCE, PipelineOperator.OR):
                 current_input = ctx.input_stream or ChaityaStream()
 
-        # Apply L2 exactly once
         duration_ms = int((time.monotonic() - start_time) * 1000)
         cmd_output = apply_l2(
             raw_output=bytes(accumulated_stdout),
@@ -487,10 +543,8 @@ class PipelineOrchestrator:
             overflow_dir=self._overflow_dir,
         )
 
-        # Yield final output chunk with L2-processed content
         yield OutputChunk(
             data=cmd_output.processed.encode("utf-8"),
             is_stderr=False,
             is_final=True,
         )
-

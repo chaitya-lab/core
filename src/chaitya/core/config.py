@@ -14,11 +14,19 @@ from __future__ import annotations
 
 import logging
 import os
+import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+
+def _default_session_backend_name() -> str:
+    """Resolve the default session substrate for this machine."""
+    if os.name != "nt" and shutil.which("tmux"):
+        return "tmux"
+    return "local"
 
 # ---------------------------------------------------------------------------
 # Config data classes — frozen after creation
@@ -57,7 +65,7 @@ class EventBusConfig:
 class SessionConfig:
     """Session management configuration."""
 
-    backend: str = "local"
+    backend: str = field(default_factory=_default_session_backend_name)
     default_session_name: str = "default"
     stuck_threshold_seconds: int = 60
 
@@ -121,7 +129,7 @@ def _resolve_defaults() -> dict[str, Any]:
             "url": "",
         },
         "session": {
-            "backend": "local",
+            "backend": _default_session_backend_name(),
             "default_session_name": "default",
             "stuck_threshold_seconds": 60,
         },
@@ -293,4 +301,3 @@ def load_config(
         supported_contract_versions=merged.get("supported_contract_versions", ["1"]),
         system_adapters=merged.get("system_adapters", []),
     )
-

@@ -14,6 +14,7 @@ from chaitya.core.config import (
     KernelConfig,
     SessionConfig,
     StoreConfig,
+    _default_session_backend_name,
     _apply_env_overrides,
     _deep_merge,
     _resolve_defaults,
@@ -50,6 +51,10 @@ class TestDefaults:
         d = _resolve_defaults()
         assert d["store"]["max_events_per_second"] == 1000
         assert d["store"]["max_log_size_bytes"] == 1_073_741_824
+
+    def test_default_session_backend_matches_platform(self):
+        d = _resolve_defaults()
+        assert d["session"]["backend"] == _default_session_backend_name()
 
 
 # ---------------------------------------------------------------------------
@@ -177,4 +182,3 @@ class TestLoadConfig:
         yaml_file.write_text("kernel:\n  unknown_key: value\n", encoding="utf-8")
         cfg = load_config(config_path=yaml_file)
         assert cfg.kernel.cli_name == "chaitya"  # defaults still work
-
