@@ -46,6 +46,8 @@ chaitya info
 
 Current status: macOS/Linux use a real `tmux` backend by default when `tmux` is available. `LocalProcessBackend` remains in-tree for fallback and focused unit testing.
 
+The repository also ships first-party workspace adaptors for `file` and `shell`. They are discovered directly from `adaptors/core/` during development, so the kernel can boot and execute real adaptor commands from the repo without extra packaging steps.
+
 ## For Adapter Developers
 
 See [Adapter Development Guide](docs/adapters-dev.md) for the complete contract specification, examples, and best practices.

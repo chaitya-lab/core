@@ -13,7 +13,7 @@ import enum
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Callable
 
 
 # ---------------------------------------------------------------------------
@@ -401,6 +401,7 @@ class AdapterPackage:
     name: str = ""
     entry_point: str = ""
     contract: AdapterContract = field(default_factory=AdapterContract)
+    handler: Callable[..., Any] | None = None
     adapter_type: AdapterType = AdapterType.USER
     status: AdapterStatus = AdapterStatus.LOADED
     error: str | None = None

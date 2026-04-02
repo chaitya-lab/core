@@ -22,7 +22,7 @@ This gives contributors a predictable place to add packages without polluting th
 
 ## Near-Term Work
 
-- Wire loaded adapter packages into executable kernel dispatch.
-- Build first-party system adaptors for registry, file, shell, route, and process.
+- Expand first-party adaptors beyond `file` and `shell` once their contracts settle.
+- Decide whether `route` and `process` stay first-party workspace adaptors or remain future external packages.
 - Expand tmux integration coverage to restart, stuck detection, and signal handling.
 - Add CI on macOS and Linux.

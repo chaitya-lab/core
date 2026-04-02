@@ -11,6 +11,8 @@ User adapters failing to load → kernel warns, continues.
 from __future__ import annotations
 
 import importlib
+import importlib.util
+import sys
 import json
 import logging
 from importlib.metadata import entry_points
@@ -285,6 +287,7 @@ class AdapterRegistry:
     async def discover(self) -> list[AdapterPackage]:
         """Discover adapter packages via pip entry points."""
         packages: list[AdapterPackage] = []
+        packages.extend(self._discover_workspace_packages())
         eps = entry_points()
 
         # Python 3.12+: eps is SelectableGroups / dict-like
@@ -315,10 +318,75 @@ class AdapterRegistry:
 
         return packages
 
+    def _discover_workspace_packages(self) -> list[AdapterPackage]:
+        """Discover first-party adaptors from the repository workspace."""
+        repo_root = Path(__file__).resolve().parents[3]
+        sdk_src = repo_root / "sdk" / "src"
+        if str(sdk_src) not in sys.path:
+            sys.path.insert(0, str(sdk_src))
+
+        packages: list[AdapterPackage] = []
+        for workspace in (repo_root / "adaptors" / "core", repo_root / "adaptors" / "community"):
+            if not workspace.is_dir():
+                continue
+            for adaptor_dir in sorted(path for path in workspace.iterdir() if path.is_dir()):
+                src_dir = adaptor_dir / "src"
+                if not src_dir.is_dir():
+                    continue
+                for init_file in src_dir.glob("*/__init__.py"):
+                    module_name = init_file.parent.name
+                    try:
+                        packages.append(
+                            self._load_module_from_path(
+                                package_name=adaptor_dir.name,
+                                module_name=module_name,
+                                module_path=init_file,
+                            )
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            "Failed to discover workspace adaptor %s: %s",
+                            adaptor_dir,
+                            exc,
+                        )
+        return packages
+
+    def _load_module_from_path(
+        self,
+        *,
+        package_name: str,
+        module_name: str,
+        module_path: Path,
+    ) -> AdapterPackage:
+        spec = importlib.util.spec_from_file_location(module_name, module_path)
+        if spec is None or spec.loader is None:
+            raise AdapterLoadError(package_name, f"Cannot load module at {module_path}")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return self._package_from_module(
+            package_name=package_name,
+            entry_point=str(module_path),
+            module=module,
+        )
+
     def _load_entry_point(self, ep: Any) -> AdapterPackage:
         """Load a single entry point into an AdapterPackage."""
         module = ep.load()
+        return self._package_from_module(
+            package_name=ep.name,
+            entry_point=str(ep.value) if hasattr(ep, "value") else str(ep),
+            module=module,
+        )
+
+    def _package_from_module(
+        self,
+        *,
+        package_name: str,
+        entry_point: str,
+        module: Any,
+    ) -> AdapterPackage:
         raw_contract: dict[str, Any] | None = None
+        handler = self._discover_handler(module, package_name)
 
         # Strategy 1: module has __adapter_contract__ attribute
         if hasattr(module, "__adapter_contract__"):
@@ -332,7 +400,7 @@ class AdapterRegistry:
 
         if raw_contract is None:
             raise AdapterLoadError(
-                ep.name,
+                package_name,
                 "No __adapter_contract__ attribute or module.json found.",
             )
 
@@ -340,15 +408,28 @@ class AdapterRegistry:
         # Override name from entry point if not set
         if not contract.name:
             contract = AdapterContract(
-                **{**contract.__dict__, "name": ep.name}  # type: ignore[arg-type]
+                **{**contract.__dict__, "name": package_name}  # type: ignore[arg-type]
             )
 
         return AdapterPackage(
             name=contract.name,
-            entry_point=str(ep.value) if hasattr(ep, "value") else str(ep),
+            entry_point=entry_point,
             contract=contract,
+            handler=handler,
             status=AdapterStatus.LOADED,
         )
+
+    def _discover_handler(self, module: Any, package_name: str) -> Callable | None:
+        explicit = getattr(module, "__chaitya_handler__", None)
+        if callable(explicit):
+            return explicit
+
+        for attr_name in dir(module):
+            attr = getattr(module, attr_name)
+            contract = getattr(attr, "__chaitya_contract__", None)
+            if callable(attr) and contract is not None and contract.name == package_name:
+                return attr
+        return None
 
     def validate(self, package: AdapterPackage) -> ValidationResult:
         """Validate an adapter's contract against kernel requirements."""
@@ -371,6 +452,8 @@ class AdapterRegistry:
         # Register the adapter
         package.status = AdapterStatus.LOADED
         self._loaded[package.name] = package
+        if package.handler is not None:
+            self._handlers[package.name] = package.handler
         logger.info(
             "Loaded adapter '%s' (v%s)",
             package.name,
@@ -440,7 +523,11 @@ class AdapterRegistry:
         """Get a loaded adapter by name."""
         return self._loaded.get(name)
 
+    def get_handler(self, name: str) -> Callable | None:
+        """Get a loaded adaptor handler by name."""
+        return self._handlers.get(name)
+
     def unload(self, name: str) -> bool:
         """Unload an adapter by name.  Returns True if it was loaded."""
+        self._handlers.pop(name, None)
         return self._loaded.pop(name, None) is not None
-

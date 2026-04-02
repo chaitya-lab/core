@@ -15,6 +15,7 @@ Reference: PRD §3.1, §3.2, §5
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 import signal
 import time
@@ -46,6 +47,14 @@ from chaitya.core.types import (
     KernelBootError,
     PipelineContext,
     SessionState,
+    AdapterPermissions,
+)
+from chaitya_sdk.context import event_bus as sdk_event_bus
+from chaitya_sdk.types import (
+    AdapterPermissions as SdkAdapterPermissions,
+    ChaityaStream as SdkChaityaStream,
+    SessionContext as SdkSessionContext,
+    SessionState as SdkSessionState,
 )
 
 logger = logging.getLogger(__name__)
@@ -54,7 +63,47 @@ logger = logging.getLogger(__name__)
 KERNEL_COMMANDS = frozenset({"info", "session", "input", "output", "watch", "registry"})
 
 # System adapters whose load failure halts boot (PRD §3.6)
-DEFAULT_SYSTEM_ADAPTERS = frozenset({"registry", "file", "shell", "route", "process"})
+DEFAULT_SYSTEM_ADAPTERS = frozenset({"file", "shell"})
+
+
+class _AdapterEventBusBridge:
+    """Adapter-facing wrapper over the core event bus."""
+
+    def __init__(self, event_bus: SqliteEventBus) -> None:
+        self._event_bus = event_bus
+        self._subscriptions: dict[str, Any] = {}
+
+    async def emit(self, event: Any) -> None:
+        if not isinstance(event, Event):
+            event = Event(
+                type=getattr(event, "type", ""),
+                source_adapter=getattr(event, "source_adapter", ""),
+                session_id=getattr(event, "session_id", None),
+                exit_code=getattr(event, "exit_code", None),
+                duration_ms=getattr(event, "duration_ms", None),
+                payload=dict(getattr(event, "payload", {})),
+                parent_event_id=getattr(event, "parent_event_id", None),
+                request_id=getattr(event, "request_id", None),
+            )
+        await self._event_bus.emit(event)
+
+    async def subscribe(
+        self,
+        handler: Any,
+        event_types: list[str] | None = None,
+        session_id: str | None = None,
+    ) -> Any:
+        subscription = await self._event_bus.subscribe(
+            EventFilter(event_types=event_types, session_id=session_id),
+            handler,
+        )
+        self._subscriptions[subscription.subscription_id] = subscription
+        return subscription
+
+    async def unsubscribe(self, subscription_id: str) -> None:
+        subscription = self._subscriptions.pop(subscription_id, None)
+        if subscription is not None:
+            await self._event_bus.unsubscribe(subscription)
 
 
 class Kernel:
@@ -93,6 +142,7 @@ class Kernel:
             max_log_size_bytes=max_log_size_bytes,
         )
         self._event_bus: SqliteEventBus = self._store.event_bus
+        self._adapter_bus = _AdapterEventBusBridge(self._event_bus)
         self._backend = self._build_session_backend(session_backend)
         self._session_mgr = SessionManager(
             backend=self._backend,
@@ -225,6 +275,7 @@ class Kernel:
 
             # Step 9: Register kernel command handlers in pipeline
             self._register_kernel_handlers()
+            self._register_loaded_adapter_handlers()
             logger.info("Step 9/10: Kernel command handlers registered")
 
             # Step 10: Emit kernel_started, accept commands
@@ -327,6 +378,64 @@ class Kernel:
         self._pipeline.register_handler("output", self._handle_output)
         self._pipeline.register_handler("watch", self._handle_watch)
         self._pipeline.register_handler("registry", self._handle_registry)
+
+    def _register_loaded_adapter_handlers(self) -> None:
+        for name, package in self._registry.loaded_adapters.items():
+            if package.handler is None:
+                continue
+            self._pipeline.register_handler(
+                name,
+                self._make_adapter_handler(name, package.handler, package.contract.permissions),
+            )
+
+    def _make_adapter_handler(
+        self,
+        name: str,
+        handler: Any,
+        permissions: AdapterPermissions,
+    ) -> AdapterHandler:
+        async def _wrapped(
+            input_stream: ChaityaStream,
+            ctx: PipelineContext,
+        ) -> tuple[bytes, int]:
+            sdk_event_bus._configure(
+                self._adapter_bus,
+                name,
+                SdkAdapterPermissions(**permissions.__dict__),
+            )
+            sdk_stream = SdkChaityaStream(
+                content=input_stream.content,
+                declared_type=input_stream.declared_type,
+                detected_type=input_stream.detected_type,
+                source=input_stream.source,
+                size_bytes=input_stream.size_bytes,
+                encoding=input_stream.encoding,
+            )
+            sdk_ctx = SdkSessionContext(
+                session_id=ctx.session_id,
+                session_state=SdkSessionState.IDLE,
+                args={
+                    "subcommand": ctx.env.get("__subcommand__", ""),
+                    "__raw_args__": ctx.env.get("__args__", []),
+                    **{k: v for k, v in ctx.env.items() if not k.startswith("__")},
+                },
+                env={k: str(v) for k, v in ctx.env.items() if not k.startswith("__")},
+                dry_run=ctx.dry_run,
+            )
+            result = handler(sdk_stream, sdk_ctx)
+            if inspect.isawaitable(result):
+                result = await result
+            if isinstance(result, tuple):
+                output, exit_code = result
+            else:
+                output, exit_code = result, 0
+            if isinstance(output, str):
+                output = output.encode("utf-8")
+            if not isinstance(output, bytes):
+                output = str(output).encode("utf-8")
+            return output, int(exit_code)
+
+        return _wrapped
 
 
     async def _handle_info(

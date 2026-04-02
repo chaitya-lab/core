@@ -289,3 +289,15 @@ class TestAdapterRegistry:
         assert "a" in loaded
         assert "bad" in failed
 
+    async def test_discover_workspace_packages(self) -> None:
+        reg = AdapterRegistry()
+        packages = reg._discover_workspace_packages()
+        names = {pkg.name for pkg in packages}
+        assert "file" in names
+        assert "shell" in names
+
+    async def test_workspace_packages_include_handlers(self) -> None:
+        reg = AdapterRegistry()
+        packages = reg._discover_workspace_packages()
+        shell_pkg = next(pkg for pkg in packages if pkg.name == "shell")
+        assert shell_pkg.handler is not None

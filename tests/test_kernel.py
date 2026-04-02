@@ -64,10 +64,20 @@ class TestBootSequence:
         assert history[0].type == KERNEL_STARTED
         await raw_kernel.shutdown()
 
-    async def test_boot_with_no_adapters(self, kernel: Kernel) -> None:
-        """Kernel with no adapters is functional but capability-free."""
+    async def test_boot_with_workspace_adapters(self, kernel: Kernel) -> None:
+        """Kernel boots cleanly with the in-repo first-party adaptors."""
         assert kernel.is_booted
-        assert len(kernel.registry.loaded_adapters) == 0
+        assert "file" in kernel.registry.loaded_adapters
+        assert "shell" in kernel.registry.loaded_adapters
+
+    async def test_boot_discovers_workspace_system_adapters(self) -> None:
+        kernel = Kernel(db_path=":memory:")
+        await kernel.boot()
+        try:
+            assert "file" in kernel.registry.loaded_adapters
+            assert "shell" in kernel.registry.loaded_adapters
+        finally:
+            await kernel.shutdown()
 
 
 # ---------------------------------------------------------------------------
@@ -151,3 +161,28 @@ class TestDispatch:
             or result.exit_code != 0
             or "error" in result.processed.lower()
         )
+
+    async def test_dispatch_workspace_shell_adapter(self) -> None:
+        kernel = Kernel(db_path=":memory:")
+        await kernel.boot()
+        try:
+            result = await kernel.dispatch("shell run --command 'printf hello'")
+            assert result.exit_code == 0
+            assert "hello" in result.processed
+        finally:
+            await kernel.shutdown()
+
+    async def test_dispatch_workspace_file_adapter(self, tmp_path) -> None:
+        kernel = Kernel(db_path=":memory:")
+        await kernel.boot()
+        file_path = tmp_path / "note.txt"
+        try:
+            write = await kernel.dispatch(
+                f"file write --path {file_path} --text hello"
+            )
+            assert write.exit_code == 0
+            read = await kernel.dispatch(f"file read --path {file_path}")
+            assert read.exit_code == 0
+            assert "hello" in read.processed
+        finally:
+            await kernel.shutdown()

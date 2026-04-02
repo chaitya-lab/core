@@ -85,7 +85,7 @@ class CoreConfig:
     adapters_config_dir: str = ""
     supported_contract_versions: list[str] = field(default_factory=lambda: ["1"])
     system_adapters: list[str] = field(
-        default_factory=lambda: ["registry", "file", "shell", "route", "process"]
+        default_factory=lambda: ["file", "shell"]
     )
 
 
@@ -136,7 +136,7 @@ def _resolve_defaults() -> dict[str, Any]:
         "templates_dir": str(base / "templates"),
         "adapters_config_dir": str(base / "adapters"),
         "supported_contract_versions": ["1"],
-        "system_adapters": ["registry", "file", "shell", "route", "process"],
+        "system_adapters": ["file", "shell"],
     }
 
 
