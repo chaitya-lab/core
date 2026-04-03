@@ -269,9 +269,14 @@ class AdapterRegistry:
     - A ``__adapter_contract__`` dict attribute on the module.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, search_paths: list[str] | None = None) -> None:
         self._loaded: dict[str, AdapterPackage] = {}
         self._handlers: dict[str, Callable] = {}
+        self._search_paths: list[str] = list(search_paths or [])
+
+    def set_search_paths(self, search_paths: list[str]) -> None:
+        """Replace additional filesystem search paths for adaptors."""
+        self._search_paths = list(search_paths)
 
     @property
     def loaded_adapters(self) -> dict[str, AdapterPackage]:
@@ -319,37 +324,61 @@ class AdapterRegistry:
         return packages
 
     def _discover_workspace_packages(self) -> list[AdapterPackage]:
-        """Discover first-party adaptors from the repository workspace."""
+        """Discover adaptors from workspace and configured filesystem paths."""
         repo_root = Path(__file__).resolve().parents[3]
         sdk_src = repo_root / "sdk" / "src"
         if str(sdk_src) not in sys.path:
             sys.path.insert(0, str(sdk_src))
 
         packages: list[AdapterPackage] = []
-        for workspace in (repo_root / "adaptors" / "core", repo_root / "adaptors" / "community"):
-            if not workspace.is_dir():
-                continue
-            for adaptor_dir in sorted(path for path in workspace.iterdir() if path.is_dir()):
-                src_dir = adaptor_dir / "src"
-                if not src_dir.is_dir():
-                    continue
-                for init_file in src_dir.glob("*/__init__.py"):
-                    module_name = init_file.parent.name
-                    try:
-                        packages.append(
-                            self._load_module_from_path(
-                                package_name=adaptor_dir.name,
-                                module_name=module_name,
-                                module_path=init_file,
-                            )
-                        )
-                    except Exception as exc:
-                        logger.warning(
-                            "Failed to discover workspace adaptor %s: %s",
-                            adaptor_dir,
-                            exc,
-                        )
+        workspaces = [
+            repo_root / "adaptors" / "core",
+            repo_root / "adaptors" / "community",
+        ]
+        workspaces.extend(Path(path).expanduser() for path in self._search_paths)
+
+        for workspace in workspaces:
+            packages.extend(self._discover_workspace_path(workspace))
         return packages
+
+    def _discover_workspace_path(self, workspace: Path) -> list[AdapterPackage]:
+        packages: list[AdapterPackage] = []
+        if not workspace.is_dir():
+            return packages
+
+        for adaptor_dir in self._iter_adaptor_dirs(workspace):
+            src_dir = adaptor_dir / "src"
+            if not src_dir.is_dir():
+                continue
+            for init_file in src_dir.glob("*/__init__.py"):
+                module_name = init_file.parent.name
+                try:
+                    packages.append(
+                        self._load_module_from_path(
+                            package_name=adaptor_dir.name,
+                            module_name=module_name,
+                            module_path=init_file,
+                        )
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to discover workspace adaptor %s: %s",
+                        adaptor_dir,
+                        exc,
+                    )
+        return packages
+
+    def _iter_adaptor_dirs(self, workspace: Path) -> list[Path]:
+        direct = [path for path in workspace.iterdir() if path.is_dir()]
+        if any((path / "src").is_dir() for path in direct):
+            return sorted(path for path in direct if path.is_dir())
+
+        nested: list[Path] = []
+        for parent in direct:
+            nested.extend(
+                sorted(path for path in parent.iterdir() if path.is_dir())
+            )
+        return [path for path in nested if path.is_dir()]
 
     def _load_module_from_path(
         self,

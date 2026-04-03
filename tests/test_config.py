@@ -117,6 +117,12 @@ class TestEnvOverrides:
         result = _apply_env_overrides(config)
         assert result["templates_dir"] == "/custom/templates"
 
+    def test_adapter_paths_override(self, monkeypatch):
+        monkeypatch.setenv("CHAITYA_ADAPTER_PATHS", "/a:/b")
+        config = {"adapter_search_paths": []}
+        result = _apply_env_overrides(config)
+        assert result["adapter_search_paths"] == ["/a", "/b"]
+
     def test_missing_env_no_change(self, monkeypatch):
         monkeypatch.delenv("CHAITYA_CLI_NAME", raising=False)
         config = {"kernel": {"cli_name": "original"}}

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Added configurable filesystem adaptor discovery via `adapter_search_paths` and `CHAITYA_ADAPTER_PATHS`.
+- Added adaptor suspension/resume handling with `input list` and `input respond`.
+- Added kernel-level tests for custom adaptor discovery and resumable input flow.
 - Added executable workspace adaptor loading from `adaptors/`.
 - Added first-party `file` and `shell` adaptors and wired loaded adaptor handlers into kernel dispatch.
 - Added a real `tmux` session backend for macOS/Linux and wired config/kernel selection to it.

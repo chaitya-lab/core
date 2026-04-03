@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import uuid
 
 import pytest
 
@@ -28,22 +29,23 @@ class TestKernelTmuxInteractive:
     async def test_interactive_roundtrip_through_kernel(self) -> None:
         kernel = Kernel(db_path=":memory:", session_backend="tmux")
         await kernel.boot()
+        session_name = f"prompt-{uuid.uuid4().hex[:8]}"
         try:
-            created = await kernel.dispatch("session create prompt")
+            created = await kernel.dispatch(f"session create {session_name}")
             assert created.exit_code == 0
 
-            start_py = await kernel.dispatch('session send-input prompt "python3" --newline')
+            start_py = await kernel.dispatch(f'session send-input {session_name} "python3" --newline')
             assert start_py.exit_code == 0
-            await kernel.dispatch('session send-input prompt "name = input(\'NAME? \')" --newline')
-            prompt_output = await kernel.dispatch("session output prompt --idle-timeout 0.4")
+            await kernel.dispatch(f'session send-input {session_name} "name = input(\'NAME? \')" --newline')
+            prompt_output = await kernel.dispatch(f"session output {session_name} --idle-timeout 0.4")
             assert "NAME?" in prompt_output.processed
 
-            await kernel.dispatch('session send-input prompt "muku" --newline')
-            await kernel.dispatch('session send-input prompt "print(f\'HELLO {name}\')" --newline')
-            final_output = await kernel.dispatch("session output prompt --idle-timeout 0.4")
+            await kernel.dispatch(f'session send-input {session_name} "muku" --newline')
+            await kernel.dispatch(f'session send-input {session_name} "print(f\'HELLO {{name}}\')" --newline')
+            final_output = await kernel.dispatch(f"session output {session_name} --idle-timeout 0.4")
             assert "HELLO muku" in final_output.processed
 
-            events = await kernel.dispatch("watch --session prompt --limit 5")
+            events = await kernel.dispatch(f"watch --session {session_name} --limit 5")
             assert "session_created" in events.processed
         finally:
             await kernel.shutdown()

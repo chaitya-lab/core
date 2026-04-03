@@ -48,6 +48,19 @@ Current status: macOS/Linux use a real `tmux` backend by default when `tmux` is 
 
 The repository also ships first-party workspace adaptors for `file` and `shell`. They are discovered directly from `adaptors/core/` during development, so the kernel can boot and execute real adaptor commands from the repo without extra packaging steps.
 
+External projects can add custom adaptors in two ways:
+
+- install Python packages that expose the `chaitya.adapters` entry point
+- point the kernel at filesystem workspaces via `adapters_config_dir` or `adapter_search_paths`
+
+Filesystem adaptor workspaces use this shape:
+
+```text
+my-adaptors/
+  mytool/
+    src/chaitya_adapter_mytool/__init__.py
+```
+
 ## For Adapter Developers
 
 See [Adapter Development Guide](docs/adapters-dev.md) for the complete contract specification, examples, and best practices.
@@ -101,6 +114,15 @@ All swappable via `core.yaml`:
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, coding standards, and contribution guidelines. Adapter authors should also read [docs/adapters-dev.md](docs/adapters-dev.md). Repository direction for future packages lives in [ROADMAP.md](ROADMAP.md) and [adaptors/README.md](adaptors/README.md).
+
+## Interactive Flow
+
+The kernel now supports two interactive patterns:
+
+- tmux-backed session control with `session send-input`, `session output`, `session signal`, `session set-env`, and `session unset-env`
+- adaptor suspension/resume with `input list` and `input respond <request_id> <value>`
+
+That means a subsystem can pause for input, emit an `input_requested` event, and continue later from the main terminal or another client.
 
 ## License
 

@@ -50,6 +50,14 @@ The registry currently reads adapter metadata from either:
 - `__adapter_contract__` on the module
 - `module.json` next to the module
 
+For local development without packaging, the kernel can also discover adaptor workspaces from configured filesystem paths. Expected layout:
+
+```text
+my-adaptors/
+  mytool/
+    src/chaitya_adapter_mytool/__init__.py
+```
+
 ## Permissions
 
 Declare permissions conservatively. The SDK exposes permission-aware helpers such as `event_bus`.
@@ -73,3 +81,17 @@ At minimum, adapter packages should test:
 - event emission and subscription behavior where relevant
 
 For system adapters, prefer integration tests against a real kernel instance.
+
+## Suspension And Resume
+
+An adaptor can request missing input by declaring `on_missing: suspend` on a parameter, or by raising `Suspension(InputSpec(...))`.
+
+From the CLI, the flow is:
+
+```bash
+chaitya mytool run
+chaitya input list
+chaitya input respond <request_id> <value>
+```
+
+The kernel emits `input_requested` and `input_response` events so headless clients can also drive the flow.

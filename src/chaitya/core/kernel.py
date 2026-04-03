@@ -19,6 +19,8 @@ import inspect
 import logging
 import signal
 import time
+import uuid
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -34,8 +36,11 @@ from chaitya.core.store import SqliteStore
 from chaitya.core.types import (
     ADAPTER_LOADED,
     ADAPTER_REJECTED,
+    INPUT_REQUESTED,
+    INPUT_RESPONSE,
     KERNEL_STARTED,
     KERNEL_SHUTTING_DOWN,
+    SESSION_RESUMED,
     AdapterLoadError,
     AdapterPackage,
     AdapterStatus,
@@ -53,8 +58,10 @@ from chaitya_sdk.context import event_bus as sdk_event_bus
 from chaitya_sdk.types import (
     AdapterPermissions as SdkAdapterPermissions,
     ChaityaStream as SdkChaityaStream,
+    InputSpec as SdkInputSpec,
     SessionContext as SdkSessionContext,
     SessionState as SdkSessionState,
+    Suspension as SdkSuspension,
 )
 
 logger = logging.getLogger(__name__)
@@ -106,6 +113,19 @@ class _AdapterEventBusBridge:
             await self._event_bus.unsubscribe(subscription)
 
 
+@dataclass
+class _PendingInputRequest:
+    request_id: str
+    adapter_name: str
+    handler: Any
+    contract: Any
+    permissions: AdapterPermissions
+    input_stream: ChaityaStream
+    ctx: PipelineContext
+    spec: SdkInputSpec
+    args: dict[str, Any]
+
+
 class Kernel:
     """Chaitya microkernel — the central orchestrator.
 
@@ -122,6 +142,7 @@ class Kernel:
         db_path: str | Path = ":memory:",
         cli_name: str = "chaitya",
         session_backend: str = "local",
+        adapter_search_paths: list[str] | None = None,
         system_adapters: frozenset[str] | None = None,
         overflow_dir: str | None = None,
         stuck_threshold_seconds: int = 60,
@@ -134,6 +155,7 @@ class Kernel:
         self._booted = False
         self._shutting_down = False
         self._boot_time: float | None = None
+        self._pending_inputs: dict[str, _PendingInputRequest] = {}
 
         # --- Subsystem composition ---
         self._store = SqliteStore(
@@ -151,7 +173,7 @@ class Kernel:
             stuck_threshold_seconds=stuck_threshold_seconds,
         )
         self._pipeline = PipelineOrchestrator(overflow_dir=overflow_dir)
-        self._registry = AdapterRegistry()
+        self._registry = AdapterRegistry(search_paths=adapter_search_paths or [])
 
     @classmethod
     def from_config(cls, config: CoreConfig) -> "Kernel":
@@ -161,6 +183,10 @@ class Kernel:
             db_path=config.store.path or ":memory:",
             cli_name=config.kernel.cli_name,
             session_backend=config.session.backend,
+            adapter_search_paths=[
+                config.adapters_config_dir,
+                *config.adapter_search_paths,
+            ],
             system_adapters=frozenset(config.system_adapters),
             overflow_dir=config.kernel.tmp_dir or None,
             stuck_threshold_seconds=config.session.stuck_threshold_seconds,
@@ -385,7 +411,12 @@ class Kernel:
                 continue
             self._pipeline.register_handler(
                 name,
-                self._make_adapter_handler(name, package.handler, package.contract.permissions),
+                self._make_adapter_handler(
+                    name,
+                    package.handler,
+                    package.contract.permissions,
+                    package.contract,
+                ),
             )
 
     def _make_adapter_handler(
@@ -393,49 +424,183 @@ class Kernel:
         name: str,
         handler: Any,
         permissions: AdapterPermissions,
+        contract: Any,
     ) -> AdapterHandler:
         async def _wrapped(
             input_stream: ChaityaStream,
             ctx: PipelineContext,
         ) -> tuple[bytes, int]:
-            sdk_event_bus._configure(
-                self._adapter_bus,
-                name,
-                SdkAdapterPermissions(**permissions.__dict__),
-            )
-            sdk_stream = SdkChaityaStream(
-                content=input_stream.content,
-                declared_type=input_stream.declared_type,
-                detected_type=input_stream.detected_type,
-                source=input_stream.source,
-                size_bytes=input_stream.size_bytes,
-                encoding=input_stream.encoding,
-            )
-            sdk_ctx = SdkSessionContext(
-                session_id=ctx.session_id,
-                session_state=SdkSessionState.IDLE,
-                args={
-                    "subcommand": ctx.env.get("__subcommand__", ""),
-                    "__raw_args__": ctx.env.get("__args__", []),
-                    **{k: v for k, v in ctx.env.items() if not k.startswith("__")},
-                },
-                env={k: str(v) for k, v in ctx.env.items() if not k.startswith("__")},
-                dry_run=ctx.dry_run,
-            )
+            return await self._invoke_adapter(name, handler, permissions, contract, input_stream, ctx)
+
+        return _wrapped
+
+    def _build_sdk_context(
+        self,
+        ctx: PipelineContext,
+        args: dict[str, Any] | None = None,
+        *,
+        session_state: SdkSessionState = SdkSessionState.IDLE,
+    ) -> SdkSessionContext:
+        return SdkSessionContext(
+            session_id=ctx.session_id,
+            session_state=session_state,
+            args=args or {
+                "subcommand": ctx.env.get("__subcommand__", ""),
+                "__raw_args__": ctx.env.get("__args__", []),
+                **{k: v for k, v in ctx.env.items() if not k.startswith("__")},
+            },
+            env={k: str(v) for k, v in ctx.env.items() if not k.startswith("__")},
+            dry_run=ctx.dry_run,
+        )
+
+    def _inject_missing_suspend_args(
+        self,
+        contract: Any,
+        args: dict[str, Any],
+    ) -> None:
+        subcommand = str(args.get("subcommand", ""))
+        for command in getattr(contract, "commands", []):
+            if command.name != subcommand:
+                continue
+            for param in command.params:
+                if (
+                    param.required
+                    and param.on_missing == "suspend"
+                    and not args.get(param.name)
+                ):
+                    raise SdkSuspension(
+                        SdkInputSpec(
+                            name=param.name,
+                            prompt=param.description or f"Provide {param.name}",
+                        )
+                    )
+            return
+
+    async def _invoke_adapter(
+        self,
+        name: str,
+        handler: Any,
+        permissions: AdapterPermissions,
+        contract: Any,
+        input_stream: ChaityaStream,
+        ctx: PipelineContext,
+        *,
+        args: dict[str, Any] | None = None,
+    ) -> tuple[bytes, int]:
+        sdk_event_bus._configure(
+            self._adapter_bus,
+            name,
+            SdkAdapterPermissions(**permissions.__dict__),
+        )
+        sdk_stream = SdkChaityaStream(
+            content=input_stream.content,
+            declared_type=input_stream.declared_type,
+            detected_type=input_stream.detected_type,
+            source=input_stream.source,
+            size_bytes=input_stream.size_bytes,
+            encoding=input_stream.encoding,
+        )
+        sdk_args = args or {
+            "subcommand": ctx.env.get("__subcommand__", ""),
+            "__raw_args__": ctx.env.get("__args__", []),
+            **{k: v for k, v in ctx.env.items() if not k.startswith("__")},
+        }
+        try:
+            self._inject_missing_suspend_args(contract, sdk_args)
+            sdk_ctx = self._build_sdk_context(ctx, sdk_args)
             result = handler(sdk_stream, sdk_ctx)
             if inspect.isawaitable(result):
                 result = await result
-            if isinstance(result, tuple):
-                output, exit_code = result
-            else:
-                output, exit_code = result, 0
-            if isinstance(output, str):
-                output = output.encode("utf-8")
-            if not isinstance(output, bytes):
-                output = str(output).encode("utf-8")
-            return output, int(exit_code)
+        except SdkSuspension as suspension:
+            request_id = str(uuid.uuid4())
+            self._pending_inputs[request_id] = _PendingInputRequest(
+                request_id=request_id,
+                adapter_name=name,
+                handler=handler,
+                contract=contract,
+                permissions=permissions,
+                input_stream=input_stream,
+                ctx=ctx,
+                spec=suspension.spec,
+                args=dict(sdk_args),
+            )
+            if ctx.session_id:
+                try:
+                    await self._session_mgr.update_state(ctx.session_id, SessionState.WAITING)
+                except Exception:
+                    pass
+            await self._event_bus.emit(
+                Event(
+                    type=INPUT_REQUESTED,
+                    source_adapter=name,
+                    session_id=ctx.session_id,
+                    request_id=request_id,
+                    payload={
+                        "name": suspension.spec.name,
+                        "prompt": suspension.spec.prompt,
+                        "input_type": suspension.spec.input_type.value,
+                        "multiline": suspension.spec.multiline,
+                        "options": suspension.spec.options,
+                        "default": suspension.spec.default,
+                    },
+                )
+            )
+            prompt = suspension.spec.prompt or f"Input required: {suspension.spec.name}"
+            return (
+                f"[waiting:{request_id}] {prompt}\nRespond with: {self.cli_name} input respond {request_id} <value>".encode("utf-8"),
+                0,
+            )
 
-        return _wrapped
+        if isinstance(result, tuple):
+            output, exit_code = result
+        else:
+            output, exit_code = result, 0
+        if isinstance(output, str):
+            output = output.encode("utf-8")
+        if not isinstance(output, bytes):
+            output = str(output).encode("utf-8")
+        return output, int(exit_code)
+
+    async def _resume_pending_input(self, request_id: str, value: str) -> tuple[bytes, int]:
+        pending = self._pending_inputs.pop(request_id, None)
+        if pending is None:
+            return f"Unknown input request: {request_id}".encode("utf-8"), 1
+
+        resumed_args = dict(pending.args)
+        resumed_args[pending.spec.name] = value
+        await self._event_bus.emit(
+            Event(
+                type=INPUT_RESPONSE,
+                source_adapter="kernel",
+                session_id=pending.ctx.session_id,
+                request_id=request_id,
+                payload={"name": pending.spec.name, "value": value},
+            )
+        )
+        if pending.ctx.session_id:
+            try:
+                await self._session_mgr.update_state(pending.ctx.session_id, SessionState.IDLE)
+                await self._event_bus.emit(
+                    Event(
+                        type=SESSION_RESUMED,
+                        source_adapter="kernel",
+                        session_id=pending.ctx.session_id,
+                        request_id=request_id,
+                        payload={"name": pending.spec.name},
+                    )
+                )
+            except Exception:
+                pass
+
+        return await self._invoke_adapter(
+            pending.adapter_name,
+            pending.handler,
+            pending.permissions,
+            pending.contract,
+            pending.input_stream,
+            pending.ctx,
+            args=resumed_args,
+        )
 
 
     async def _handle_info(
@@ -627,7 +792,27 @@ class Kernel:
         self, input_stream: ChaityaStream, ctx: PipelineContext
     ) -> tuple[bytes, int]:
         """Handle ``input <options>`` — provide input to a suspended command."""
-        return b"input: not yet implemented", 0
+        sub = ctx.env.get("__subcommand__", "list")
+        positional = ctx.env.get("__args__", [])
+
+        if sub == "list":
+            if not self._pending_inputs:
+                return b"No pending input requests.", 0
+            lines = [f"{'REQUEST_ID':36s} {'ADAPTER':12s} {'FIELD':16s} PROMPT"]
+            for request_id, pending in sorted(self._pending_inputs.items()):
+                lines.append(
+                    f"{request_id:36s} {pending.adapter_name:12s} {pending.spec.name:16s} {pending.spec.prompt}"
+                )
+            return "\n".join(lines).encode("utf-8"), 0
+
+        if sub == "respond":
+            request_id = positional[0] if positional else ""
+            value = positional[1] if len(positional) > 1 else str(ctx.env.get("value", ""))
+            if not request_id:
+                return b"Usage: input respond <request_id> <value>", 1
+            return await self._resume_pending_input(request_id, value)
+
+        return f"Unknown input subcommand: {sub}".encode("utf-8"), 1
 
     async def _handle_output(
         self, input_stream: ChaityaStream, ctx: PipelineContext
