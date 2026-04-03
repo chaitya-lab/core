@@ -21,6 +21,7 @@ import signal
 import time
 import uuid
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -59,6 +60,7 @@ from chaitya_sdk.types import (
     AdapterPermissions as SdkAdapterPermissions,
     ChaityaStream as SdkChaityaStream,
     InputSpec as SdkInputSpec,
+    InputType as SdkInputType,
     SessionContext as SdkSessionContext,
     SessionState as SdkSessionState,
     Suspension as SdkSuspension,
@@ -302,6 +304,7 @@ class Kernel:
             # Step 9: Register kernel command handlers in pipeline
             self._register_kernel_handlers()
             self._register_loaded_adapter_handlers()
+            await self._restore_pending_inputs()
             logger.info("Step 9/10: Kernel command handlers registered")
 
             # Step 10: Emit kernel_started, accept commands
@@ -524,6 +527,32 @@ class Kernel:
                 spec=suspension.spec,
                 args=dict(sdk_args),
             )
+            await self._store.save_pending_input(
+                request_id=request_id,
+                adapter_name=name,
+                session_id=ctx.session_id,
+                spec={
+                    "name": suspension.spec.name,
+                    "prompt": suspension.spec.prompt,
+                    "input_type": suspension.spec.input_type.value,
+                    "multiline": suspension.spec.multiline,
+                    "options": suspension.spec.options,
+                    "min_value": suspension.spec.min_value,
+                    "max_value": suspension.spec.max_value,
+                    "default": suspension.spec.default,
+                },
+                args=dict(sdk_args),
+                ctx_env=dict(ctx.env),
+                input_stream={
+                    "content": input_stream.content.decode("utf-8", errors="surrogateescape"),
+                    "declared_type": input_stream.declared_type,
+                    "detected_type": input_stream.detected_type,
+                    "source": input_stream.source,
+                    "size_bytes": input_stream.size_bytes,
+                    "encoding": input_stream.encoding,
+                },
+                created_at=datetime.now(timezone.utc).isoformat(),
+            )
             if ctx.session_id:
                 try:
                     await self._session_mgr.update_state(ctx.session_id, SessionState.WAITING)
@@ -565,6 +594,7 @@ class Kernel:
         pending = self._pending_inputs.pop(request_id, None)
         if pending is None:
             return f"Unknown input request: {request_id}".encode("utf-8"), 1
+        await self._store.delete_pending_input(request_id)
 
         resumed_args = dict(pending.args)
         resumed_args[pending.spec.name] = value
@@ -601,6 +631,50 @@ class Kernel:
             pending.ctx,
             args=resumed_args,
         )
+
+    async def _restore_pending_inputs(self) -> None:
+        for item in await self._store.list_pending_inputs():
+            package = self._registry.get_adapter(item["adapter_name"])
+            if package is None or package.handler is None:
+                logger.warning(
+                    "Pending input request %s skipped because adaptor %s is unavailable",
+                    item["request_id"],
+                    item["adapter_name"],
+                )
+                continue
+
+            spec_raw = item["spec"]
+            input_stream_raw = item["input_stream"]
+            self._pending_inputs[item["request_id"]] = _PendingInputRequest(
+                request_id=item["request_id"],
+                adapter_name=item["adapter_name"],
+                handler=package.handler,
+                contract=package.contract,
+                permissions=package.contract.permissions,
+                input_stream=ChaityaStream(
+                    content=input_stream_raw["content"].encode("utf-8", errors="surrogateescape"),
+                    declared_type=input_stream_raw["declared_type"],
+                    detected_type=input_stream_raw.get("detected_type"),
+                    source=input_stream_raw.get("source", ""),
+                    size_bytes=input_stream_raw.get("size_bytes", 0),
+                    encoding=input_stream_raw.get("encoding", "utf-8"),
+                ),
+                ctx=PipelineContext(
+                    session_id=item["session_id"],
+                    env=item["ctx_env"],
+                ),
+                spec=SdkInputSpec(
+                    name=spec_raw["name"],
+                    prompt=spec_raw.get("prompt", ""),
+                    input_type=SdkInputType[spec_raw.get("input_type", "text").upper()],
+                    multiline=spec_raw.get("multiline", False),
+                    options=spec_raw.get("options", []),
+                    min_value=spec_raw.get("min_value"),
+                    max_value=spec_raw.get("max_value"),
+                    default=spec_raw.get("default"),
+                ),
+                args=item["args"],
+            )
 
 
     async def _handle_info(

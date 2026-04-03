@@ -83,3 +83,32 @@ class TestCustomAdaptorPaths:
             assert "input_requested" in watched.processed
         finally:
             await kernel.shutdown()
+
+    async def test_pending_input_survives_kernel_restart(self, tmp_path: Path) -> None:
+        root = _write_custom_adaptor(tmp_path)
+        db_path = tmp_path / "chaitya.db"
+        config = CoreConfig(
+            kernel=KernelConfig(),
+            store=StoreConfig(path=str(db_path)),
+            event_bus=EventBusConfig(),
+            session=SessionConfig(backend="local"),
+            adapter_search_paths=[str(root)],
+            system_adapters=["file", "shell"],
+        )
+
+        kernel = Kernel.from_config(config)
+        await kernel.boot()
+        suspended = await kernel.dispatch("asker hello")
+        assert "[waiting:" in suspended.processed
+        await kernel.shutdown()
+
+        kernel = Kernel.from_config(config)
+        await kernel.boot()
+        try:
+            pending = await kernel.dispatch("input list")
+            request_id = pending.processed.splitlines()[1].split()[0]
+            resumed = await kernel.dispatch(f"input respond {request_id} muku")
+            assert resumed.exit_code == 0
+            assert "Hello muku" in resumed.processed
+        finally:
+            await kernel.shutdown()

@@ -33,7 +33,7 @@ def _resolve_cli_name() -> str:
     return os.environ.get("CHAITYA_CLI_NAME", "chaitya")
 
 
-def _resolve_db_path() -> Path:
+def _resolve_db_path(*, create_parent: bool = True) -> Path:
     """Resolve the default database path.
 
     Uses ``CHAITYA_DB_PATH`` if set, otherwise ``~/.chaitya/chaitya.db``.
@@ -44,7 +44,8 @@ def _resolve_db_path() -> Path:
         p = Path(env_path)
     else:
         p = Path.home() / ".chaitya" / "chaitya.db"
-    p.parent.mkdir(parents=True, exist_ok=True)
+    if create_parent:
+        p.parent.mkdir(parents=True, exist_ok=True)
     return p
 
 
@@ -62,7 +63,7 @@ async def _run(cli_name: str, args: list[str]) -> int:
     """Boot kernel, dispatch command, print output, shutdown."""
     # Parse global flags before the command expression
     log_level = "WARNING"
-    db_path: str | Path = _resolve_db_path()
+    db_path: str | Path | None = None
 
     filtered_args: list[str] = []
     i = 0
@@ -95,6 +96,9 @@ async def _run(cli_name: str, args: list[str]) -> int:
 
     _setup_logging(log_level)
 
+    if db_path is None:
+        db_path = _resolve_db_path()
+
     # Build command expression — empty means "info"
     expression = " ".join(filtered_args) if filtered_args else "info"
 
@@ -102,7 +106,8 @@ async def _run(cli_name: str, args: list[str]) -> int:
     config = load_config()
     kernel = Kernel.from_config(config)
     # Override from CLI flags
-    if db_path != _resolve_db_path():
+    default_db_path = _resolve_db_path(create_parent=False)
+    if db_path != default_db_path:
         kernel = Kernel(config=config, db_path=db_path, cli_name=cli_name)
     elif cli_name != config.kernel.cli_name:
         kernel = Kernel(config=config, db_path=config.store.path or ":memory:", cli_name=cli_name)
@@ -159,4 +164,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

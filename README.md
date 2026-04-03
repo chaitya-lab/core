@@ -65,6 +65,11 @@ my-adaptors/
 
 See [Adapter Development Guide](docs/adapters-dev.md) for the complete contract specification, examples, and best practices.
 
+Core reference docs:
+
+- [Architecture](docs/architecture.md)
+- [Usage](docs/usage.md)
+
 ```bash
 # Install the SDK
 pip install chaitya-sdk

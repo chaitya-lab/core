@@ -163,3 +163,30 @@ class TestEventLog:
         await store.append_event(Event(type="bus_test"))
         assert len(received) == 1
 
+
+class TestPendingInputs:
+    async def test_save_list_delete_pending_input(self, store: SqliteStore) -> None:
+        await store.save_pending_input(
+            request_id="req-1",
+            adapter_name="asker",
+            session_id="s1",
+            spec={"name": "body", "prompt": "Body", "input_type": "text"},
+            args={"subcommand": "send"},
+            ctx_env={"foo": "bar"},
+            input_stream={
+                "content": "",
+                "declared_type": "text/plain",
+                "detected_type": None,
+                "source": "",
+                "size_bytes": 0,
+                "encoding": "utf-8",
+            },
+            created_at="2026-04-03T00:00:00+00:00",
+        )
+        pending = await store.list_pending_inputs()
+        assert len(pending) == 1
+        assert pending[0]["request_id"] == "req-1"
+        assert pending[0]["adapter_name"] == "asker"
+
+        await store.delete_pending_input("req-1")
+        assert await store.list_pending_inputs() == []

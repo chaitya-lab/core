@@ -82,6 +82,20 @@ class SqliteStore:
             )
             """
         )
+        await self._db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS pending_inputs (
+                request_id        TEXT PRIMARY KEY,
+                adapter_name      TEXT NOT NULL,
+                session_id        TEXT,
+                spec_json         TEXT NOT NULL,
+                args_json         TEXT NOT NULL,
+                ctx_env_json      TEXT NOT NULL,
+                input_stream_json TEXT NOT NULL,
+                created_at        TEXT NOT NULL
+            )
+            """
+        )
         await self._db.commit()
         # Open the event bus with its own connection to same DB
         await self._event_bus.open()
@@ -159,6 +173,88 @@ class SqliteStore:
         if self._db is None:
             raise RuntimeError("Store not open")
         await self._db.execute("DELETE FROM sessions WHERE name = ?", (name,))
+        await self._db.commit()
+
+    # ------------------------------------------------------------------
+    # Pending Suspension Requests
+    # ------------------------------------------------------------------
+
+    async def save_pending_input(
+        self,
+        *,
+        request_id: str,
+        adapter_name: str,
+        session_id: str | None,
+        spec: dict[str, Any],
+        args: dict[str, Any],
+        ctx_env: dict[str, Any],
+        input_stream: dict[str, Any],
+        created_at: str,
+    ) -> None:
+        if self._db is None:
+            raise RuntimeError("Store not open")
+        await self._db.execute(
+            """
+            INSERT INTO pending_inputs
+                (request_id, adapter_name, session_id, spec_json, args_json,
+                 ctx_env_json, input_stream_json, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(request_id) DO UPDATE SET
+                adapter_name = excluded.adapter_name,
+                session_id = excluded.session_id,
+                spec_json = excluded.spec_json,
+                args_json = excluded.args_json,
+                ctx_env_json = excluded.ctx_env_json,
+                input_stream_json = excluded.input_stream_json,
+                created_at = excluded.created_at
+            """,
+            (
+                request_id,
+                adapter_name,
+                session_id,
+                json.dumps(spec),
+                json.dumps(args),
+                json.dumps(ctx_env),
+                json.dumps(input_stream),
+                created_at,
+            ),
+        )
+        await self._db.commit()
+
+    async def list_pending_inputs(self) -> list[dict[str, Any]]:
+        if self._db is None:
+            raise RuntimeError("Store not open")
+        items: list[dict[str, Any]] = []
+        async with self._db.execute(
+            """
+            SELECT request_id, adapter_name, session_id, spec_json, args_json,
+                   ctx_env_json, input_stream_json, created_at
+            FROM pending_inputs
+            ORDER BY created_at
+            """
+        ) as cursor:
+            async for row in cursor:
+                items.append(
+                    {
+                        "request_id": row[0],
+                        "adapter_name": row[1],
+                        "session_id": row[2],
+                        "spec": json.loads(row[3]),
+                        "args": json.loads(row[4]),
+                        "ctx_env": json.loads(row[5]),
+                        "input_stream": json.loads(row[6]),
+                        "created_at": row[7],
+                    }
+                )
+        return items
+
+    async def delete_pending_input(self, request_id: str) -> None:
+        if self._db is None:
+            raise RuntimeError("Store not open")
+        await self._db.execute(
+            "DELETE FROM pending_inputs WHERE request_id = ?",
+            (request_id,),
+        )
         await self._db.commit()
 
     # ------------------------------------------------------------------
