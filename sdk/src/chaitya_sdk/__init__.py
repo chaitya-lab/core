@@ -21,7 +21,7 @@ __version__ = "0.1.0a1"
 
 # --- Public API surface (PRD §10) ---
 
-from chaitya_sdk.context import event_bus  # noqa: F401
+from chaitya_sdk.context import event_bus, registry_proxy  # noqa: F401
 from chaitya_sdk.decorator import adapter, get_registered_adapters  # noqa: F401
 from chaitya_sdk.types import (  # noqa: F401
     # Event type constants
@@ -77,6 +77,7 @@ __all__ = [
     "ChaityaStream",
     "SessionContext",
     "event_bus",
+    "registry_proxy",
     "Suspension",
     "InputSpec",
     "InputType",

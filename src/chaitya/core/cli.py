@@ -17,10 +17,14 @@ Reference: PRD §3.2, §5, §12
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import sys
+from datetime import datetime, timezone
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
+from typing import Any
 
 from chaitya.core import __version__
 from chaitya.core.config import load_config
@@ -49,14 +53,63 @@ def _resolve_db_path(*, create_parent: bool = True) -> Path:
     return p
 
 
-def _setup_logging(level: str = "WARNING") -> None:
-    """Configure root logger for CLI use."""
-    numeric = getattr(logging, level.upper(), logging.WARNING)
-    logging.basicConfig(
-        level=numeric,
-        format="%(levelname)s %(name)s: %(message)s",
-        stream=sys.stderr,
+class _JsonFormatter(logging.Formatter):
+    """Format log records as JSON lines (PRD §14: kernel debug log)."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        ts = datetime.now(timezone.utc).isoformat()
+        return json.dumps(
+            {
+                "timestamp": ts,
+                "level": record.levelname,
+                "logger": record.name,
+                "message": record.getMessage(),
+            },
+            separators=(",", ":"),
+        )
+
+
+def _setup_kernel_logging(config: Any) -> None:
+    """Set up kernel debug log file (PRD §14).
+
+    The debug log is a rotating JSON-structured log at the path from
+    ``kernel.debug_log`` in config. Records: boot sequence steps,
+    adapter load/reject, pipeline errors, event bus errors, session state
+    transitions, permission denials, shutdown sequence.
+    """
+    debug_path = getattr(config, "debug_log", None) or ""
+    if not debug_path:
+        return
+
+    log_path = Path(debug_path).expanduser()
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+
+    root = logging.getLogger()
+    root.setLevel(logging.DEBUG)
+
+    file_handler = RotatingFileHandler(
+        log_path,
+        maxBytes=10 * 1024 * 1024,
+        backupCount=5,
     )
+    file_handler.setLevel(logging.DEBUG)
+    file_handler.setFormatter(_JsonFormatter())
+    root.addHandler(file_handler)
+
+
+def _setup_logging(level: str = "WARNING") -> None:
+    """Configure stderr logging for CLI use.
+
+    The kernel debug log (file) is set up separately by _setup_kernel_logging.
+    This only configures the stderr output.
+    """
+    root = logging.getLogger()
+    numeric = getattr(logging, level.upper(), logging.WARNING)
+
+    stderr_handler = logging.StreamHandler(sys.stderr)
+    stderr_handler.setLevel(numeric)
+    stderr_handler.setFormatter(logging.Formatter("%(levelname)s %(name)s: %(message)s"))
+    root.addHandler(stderr_handler)
 
 
 async def _run(cli_name: str, args: list[str]) -> int:
@@ -94,6 +147,13 @@ async def _run(cli_name: str, args: list[str]) -> int:
         filtered_args.append(arg)
         i += 1
 
+    # Load config first — needed for kernel logging setup
+    config = load_config()
+
+    # Set up kernel debug log to file (PRD §14)
+    _setup_kernel_logging(config.kernel)
+
+    # Stderr logging — controlled by --debug/--verbose flags
     _setup_logging(log_level)
 
     if db_path is None:
@@ -102,8 +162,7 @@ async def _run(cli_name: str, args: list[str]) -> int:
     # Build command expression — empty means "info"
     expression = " ".join(filtered_args) if filtered_args else "info"
 
-    # Load config (YAML + env) then apply CLI flag overrides
-    config = load_config()
+    # Create kernel from config
     kernel = Kernel.from_config(config)
     # Override from CLI flags
     default_db_path = _resolve_db_path(create_parent=False)

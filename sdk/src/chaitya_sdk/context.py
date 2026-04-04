@@ -84,7 +84,8 @@ class EventBusProxy:
         """
         if not self._permissions.can_emit_events:
             raise PermissionDenied(
-                self._adapter_name, "emit events",
+                self._adapter_name,
+                "emit events",
                 "Adapter contract does not grant can_emit_events.",
             )
         bus = self._require_bus()
@@ -99,7 +100,9 @@ class EventBusProxy:
         """Subscribe to events.  Returns a subscription ID."""
         bus = self._require_bus()
         sub = await bus.subscribe(
-            handler, event_types=event_types, session_id=session_id,
+            handler,
+            event_types=event_types,
+            session_id=session_id,
         )
         # Return the subscription_id string
         return sub.subscription_id if hasattr(sub, "subscription_id") else str(sub)
@@ -110,6 +113,32 @@ class EventBusProxy:
         await bus.unsubscribe(subscription_id)
 
 
-# Module-level singleton — adapters import this directly.
+# Module-level singletons — adapters import these directly.
 event_bus = EventBusProxy()
+_registry_proxy: "RegistryProxy | None" = None
 
+
+class RegistryProxy:
+    """Adapter-facing registry access proxy.
+
+    The kernel injects the real registry at boot time via ``set_registry()``.
+    This allows the registry adapter (and any other adapter that needs to
+    query the registry) to do so without importing ``chaitya.core.registry``.
+    """
+
+    def __init__(self) -> None:
+        self._registry: Any = None
+
+    def set_registry(self, registry: Any) -> None:
+        self._registry = registry
+
+    def get_registry(self) -> Any:
+        if self._registry is None:
+            raise RuntimeError(
+                "Registry not available — adapter may only use registry "
+                "inside a handler call, after the kernel has booted."
+            )
+        return self._registry
+
+
+registry_proxy = RegistryProxy()

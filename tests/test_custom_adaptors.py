@@ -17,7 +17,7 @@ def _write_custom_adaptor(base: Path, name: str = "asker") -> Path:
         textwrap.dedent(
             f"""\
             from dataclasses import asdict
-            from chaitya_sdk import adapter, ChaityaStream, SessionContext
+            from chaitya_sdk import adapter, ChaityaStream, SessionContext, Suspension, InputSpec
 
             @adapter(
                 name="{name}",
@@ -34,7 +34,9 @@ def _write_custom_adaptor(base: Path, name: str = "asker") -> Path:
                     "examples": ["chaitya {name} hello --name muku"],
                 }}],
             )
-            def {name}_handler(stream: ChaityaStream, ctx: SessionContext):
+            async def {name}_handler(stream: ChaityaStream, ctx: SessionContext):
+                if "name" not in ctx.args:
+                    raise Suspension(InputSpec(name="name", prompt="Your name?"))
                 return f"Hello {{ctx.args['name']}}".encode("utf-8")
 
             __chaitya_handler__ = {name}_handler

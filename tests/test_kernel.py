@@ -8,6 +8,9 @@ from chaitya.core.kernel import Kernel, KERNEL_COMMANDS
 from chaitya.core.types import (
     AdapterContract,
     AdapterPackage,
+    AdapterPermissions,
+    AdapterStatus,
+    ChaityaStream,
     CommandOutput,
     CommandSpec,
     Event,
@@ -15,7 +18,53 @@ from chaitya.core.types import (
     KernelBootError,
     KERNEL_STARTED,
     KERNEL_SHUTTING_DOWN,
+    PipelineContext,
 )
+
+
+def _make_mock_registry_adapter() -> AdapterPackage:
+    """Build a mock registry adapter package for tests.
+
+    The real registry adapter is loaded via pip entry points by BootstrapLoader.
+    In tests, we bypass pip by providing this pre-built package directly.
+    """
+    contract = AdapterContract(
+        contract_version="1",
+        name="registry",
+        description="Registry adapter — discovers and manages other adapters.",
+        commands=[
+            CommandSpec(
+                name="list",
+                description="List all discovered adapters.",
+                params=[],
+                examples=["chaitya registry list"],
+            ),
+            CommandSpec(
+                name="info",
+                description="Show details for a named adapter.",
+                params=[],
+                examples=["chaitya registry info --name shell"],
+            ),
+            CommandSpec(
+                name="validate",
+                description="Validate an adapter contract.",
+                params=[],
+                examples=["chaitya registry validate --name file"],
+            ),
+        ],
+        permissions=AdapterPermissions(can_emit_events=True),
+    )
+
+    async def mock_handler(stream, ctx):
+        return b"[registry adapter - mock]", 0
+
+    return AdapterPackage(
+        name="registry",
+        entry_point="<test-mock>",
+        contract=contract,
+        handler=mock_handler,
+        status=AdapterStatus.LOADED,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -26,7 +75,12 @@ from chaitya.core.types import (
 @pytest.fixture
 async def kernel():
     """Create, boot, and yield a kernel; shut down after test."""
-    k = Kernel(db_path=":memory:", system_adapters=frozenset())
+    mock_reg = _make_mock_registry_adapter()
+    k = Kernel(
+        db_path=":memory:",
+        system_adapters=frozenset(),
+        registry_adapter_pkg=mock_reg,
+    )
     await k.boot()
     yield k
     await k.shutdown()
@@ -35,7 +89,12 @@ async def kernel():
 @pytest.fixture
 async def raw_kernel():
     """Unbooted kernel for boot-sequence tests."""
-    return Kernel(db_path=":memory:", system_adapters=frozenset())
+    mock_reg = _make_mock_registry_adapter()
+    return Kernel(
+        db_path=":memory:",
+        system_adapters=frozenset(),
+        registry_adapter_pkg=mock_reg,
+    )
 
 
 # ---------------------------------------------------------------------------

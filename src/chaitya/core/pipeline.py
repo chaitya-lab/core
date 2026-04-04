@@ -106,8 +106,27 @@ def _parse_command_token(token: str) -> PipelineCommand:
         raise ValueError("Empty command in pipeline expression")
 
     adapter = parts[0]
-    subcommand = parts[1] if len(parts) > 1 else ""
-    raw_args = parts[2:] if len(parts) > 2 else []
+    # Subcommand: first non-flag token that follows a non-flag token
+    # (skip --flags and their values; positional args that follow flags are args)
+    subcommand = ""
+    raw_args: list[str] = []
+    skip_next = False
+    for i, part in enumerate(parts[1:]):
+        if skip_next:
+            skip_next = False
+            continue
+        if part.startswith("--"):
+            raw_args.append(part)
+            # Check if next token is a flag value (doesn't start with --)
+            if i + 2 < len(parts) and not parts[i + 2].startswith("--"):
+                raw_args.append(parts[i + 2])
+                skip_next = True
+            continue
+        # Non-flag token
+        if not subcommand:
+            subcommand = part
+        else:
+            raw_args.append(part)
 
     # Parse --key=value and --key value pairs into dict
     args: dict[str, Any] = {}

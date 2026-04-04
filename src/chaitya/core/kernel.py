@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any
 
 from chaitya_sdk.context import event_bus as sdk_event_bus
+from chaitya_sdk.context import registry_proxy
 from chaitya_sdk.types import (
     AdapterPermissions as SdkAdapterPermissions,
 )
@@ -52,7 +53,7 @@ from chaitya.core.backends.tmux import TmuxSessionBackend
 from chaitya.core.config import CoreConfig
 from chaitya.core.event_bus import SqliteEventBus
 from chaitya.core.pipeline import AdapterHandler, PipelineOrchestrator
-from chaitya.core.registry import AdapterRegistry
+from chaitya.core.registry import AdapterRegistry, BootstrapLoader, REGISTRY_ADAPTER_NAME
 from chaitya.core.session_manager import SessionManager
 from chaitya.core.store import SqliteStore
 from chaitya.core.types import (
@@ -159,6 +160,7 @@ class Kernel:
         max_events_per_second: int = 1000,
         max_log_size_bytes: int = 1_073_741_824,
         templates_dir: str | None = None,
+        registry_adapter_pkg: Any = None,
     ) -> None:
         self._config = config
         self.cli_name = cli_name
@@ -167,6 +169,8 @@ class Kernel:
         self._shutting_down = False
         self._boot_time: float | None = None
         self._pending_inputs: dict[str, _PendingInputRequest] = {}
+        self._bootstrap_loader = BootstrapLoader()
+        self._registry_adapter_pkg: Any = registry_adapter_pkg
 
         # --- Subsystem composition ---
         self._store = SqliteStore(
@@ -275,19 +279,33 @@ class Kernel:
             await self._event_bus.open()
             logger.info("Step 3/10: Event bus opened")
 
-            # Step 4: Bootstrap adapter registry (discover installed adapters)
-            packages = await self._registry.discover()
-            logger.info("Step 4/10: Discovered %d adapter package(s)", len(packages))
+            # Step 4: Bootstrap loader finds and loads registry adapter (PRD §3.6)
+            # If registry adapter is missing: kernel halts with installation instructions
+            if self._registry_adapter_pkg is None:
+                try:
+                    self._registry_adapter_pkg = self._bootstrap_loader.load_registry_adapter()
+                except AdapterLoadError as exc:
+                    raise KernelBootError(
+                        f"Registry adapter not found. Install with:\n"
+                        f"  pip install chaitya-adapter-registry\n"
+                        f"Details: {exc}"
+                    ) from exc
+            logger.info("Step 4/10: Registry adapter loaded")
 
-            # Step 5: Build dependency graph
+            # Step 5: Registry: discover all installed adapters
+            packages = await self._registry.discover()
+            logger.info("Step 5/10: Discovered %d adapter package(s)", len(packages))
+
+            # Step 6: Dependency graph: topological sort
             graph = self._registry.build_dependency_graph(packages)
             logger.info(
-                "Step 5/10: Dependency graph built (%d in order, %d rejected)",
+                "Step 6/10: Dependency graph built (%d in order, %d rejected)",
                 len(graph.load_order),
                 len(graph.rejected),
             )
 
-            # Steps 6-7: Load system adapters then user adapters
+            # Step 7: Load system adapters in order
+            # Step 8: Load user adapters in order
             loaded, failed = await self._registry.load_all(
                 packages, system_adapters=self._system_adapters
             )
@@ -296,22 +314,23 @@ class Kernel:
             for name in failed:
                 await self._event_bus.emit(Event(type=ADAPTER_REJECTED, payload={"adapter": name}))
             logger.info(
-                "Steps 6-7/10: Loaded %d adapter(s), %d failed",
+                "Steps 7-8/10: Loaded %d adapter(s), %d failed",
                 len(loaded),
                 len(failed),
             )
 
-            # Step 8: Restore session state from store
+            # Step 9: Restore session state from store
             await self._session_mgr.start()
-            logger.info("Step 8/10: Session state restored")
+            logger.info("Step 9/10: Session state restored")
 
-            # Step 9: Register kernel command handlers in pipeline
+            # Step 10: Register kernel command handlers in pipeline
             self._register_kernel_handlers()
             self._register_loaded_adapter_handlers()
             await self._restore_pending_inputs()
-            logger.info("Step 9/10: Kernel command handlers registered")
+            logger.info("Step 10/10: Kernel command handlers registered")
 
-            # Step 10: Emit kernel_started, accept commands
+            # Step 11: Emit kernel_started, accept commands
+            registry_proxy.set_registry(self._registry)
             self._boot_time = time.monotonic()
             self._booted = True
             await self._event_bus.emit(
@@ -333,7 +352,11 @@ class Kernel:
         except KernelBootError:
             raise
         except Exception as exc:
-            raise KernelBootError(f"Boot failed: {exc}") from exc
+            import traceback
+
+            raise KernelBootError(
+                f"Boot failed: {type(exc).__name__}: {exc}\n{traceback.format_exc()}"
+            ) from exc
 
     # -- Shutdown (PRD §3.1) --
 

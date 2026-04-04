@@ -41,6 +41,126 @@ SUPPORTED_CONTRACT_VERSIONS: frozenset[str] = frozenset({"1"})
 # Entry-point group name for adapter discovery
 ENTRY_POINT_GROUP = "chaitya.adapters"
 
+# Registry adapter entry point name (PRD §3.6: bootstrap loader)
+REGISTRY_ADAPTER_NAME = "registry"
+
+
+# ---------------------------------------------------------------------------
+# Bootstrap Loader (PRD §3.6, §13 — ~50 lines)
+# ---------------------------------------------------------------------------
+
+
+class BootstrapLoader:
+    """Minimal bootstrap loader — finds and loads the registry adapter.
+
+    This is the kernel's only touchpoint with pip entry points.
+    All subsequent adapter loading goes through the registry adapter.
+
+    PRD §3.6:
+        "The kernel contains a minimal bootstrap loader (~50 lines).
+        It finds and loads the registry adapter from a known path
+        (chaitya.adapters pip entry point). If the registry adapter
+        is missing, the kernel halts with installation instructions."
+
+    This class is intentionally minimal. It does NOT do discovery,
+    validation, or dependency resolution — those are the registry adapter's
+    responsibilities.
+    """
+
+    def __init__(self) -> None:
+        self._registry_adapter: Any = None
+
+    def load_registry_adapter(self) -> Any:
+        """Find and load the registry adapter from pip entry points.
+
+        Returns:
+            The registry adapter package (AdapterPackage) with a handler.
+
+        Raises:
+            AdapterLoadError: if the registry adapter is not found or invalid.
+        """
+        if self._registry_adapter is not None:
+            return self._registry_adapter
+
+        from importlib.metadata import entry_points
+
+        eps = entry_points()
+        if hasattr(eps, "select"):
+            registry_eps = list(eps.select(group=ENTRY_POINT_GROUP, name=REGISTRY_ADAPTER_NAME))
+        else:
+            registry_eps = [
+                ep for ep in eps.get(ENTRY_POINT_GROUP, []) if ep.name == REGISTRY_ADAPTER_NAME
+            ]
+
+        if not registry_eps:
+            raise AdapterLoadError(
+                REGISTRY_ADAPTER_NAME,
+                f"Registry adapter not found. "
+                f"Install with: pip install chaitya-adapter-registry\n"
+                f"The registry adapter is required for adapter discovery.",
+            )
+
+        ep = registry_eps[0]
+        try:
+            module = ep.load()
+            pkg = self._package_from_module(
+                package_name=REGISTRY_ADAPTER_NAME,
+                entry_point=str(ep.value) if hasattr(ep, "value") else str(ep),
+                module=module,
+            )
+            self._registry_adapter = pkg
+            return pkg
+        except Exception as exc:
+            raise AdapterLoadError(REGISTRY_ADAPTER_NAME, str(exc)) from exc
+
+    def _package_from_module(
+        self,
+        *,
+        package_name: str,
+        entry_point: str,
+        module: Any,
+    ) -> Any:
+        raw_contract: dict[str, Any] | None = None
+        handler: Any = None
+
+        if hasattr(module, "__adapter_contract__"):
+            raw_contract = module.__adapter_contract__
+
+        if hasattr(module, "__file__") and module.__file__:
+            module_json = Path(module.__file__).parent / "module.json"
+            if module_json.exists():
+                raw_contract = json.loads(module_json.read_text(encoding="utf-8"))
+
+        if raw_contract is None:
+            raise AdapterLoadError(
+                package_name,
+                "No __adapter_contract__ attribute or module.json found.",
+            )
+
+        contract = _parse_contract(raw_contract)
+
+        if not contract.name:
+            contract = AdapterContract(**{**contract.__dict__, "name": package_name})
+
+        explicit = getattr(module, "__chaitya_handler__", None)
+        if callable(explicit):
+            handler = explicit
+        else:
+            for attr_name in dir(module):
+                attr = getattr(module, attr_name)
+                c = getattr(attr, "__chaitya_contract__", None)
+                if callable(attr) and c is not None and c.name == package_name:
+                    handler = attr
+                    break
+
+        return AdapterPackage(
+            name=contract.name,
+            entry_point=entry_point,
+            contract=contract,
+            handler=handler,
+            status=AdapterStatus.LOADED,
+        )
+
 
 # ---------------------------------------------------------------------------
 # Contract Parsing
@@ -177,8 +297,7 @@ def validate_contract(
             warnings.append(f"Command '{cmd.name}' declares no parameters.")
         if not cmd.examples:
             errors.append(
-                f"Command '{cmd.name}' has no examples. "
-                f"At least one example is required."
+                f"Command '{cmd.name}' has no examples. At least one example is required."
             )
 
     return ValidationResult(
@@ -337,15 +456,19 @@ class AdapterRegistry:
         workspaces.extend(Path(path).expanduser() for path in self._search_paths)
 
         for workspace in workspaces:
-            packages.extend(self._discover_workspace_path(workspace))
+            packages.extend(self._discover_workspace_path(workspace, skip_registry=True))
         return packages
 
-    def _discover_workspace_path(self, workspace: Path) -> list[AdapterPackage]:
+    def _discover_workspace_path(
+        self, workspace: Path, *, skip_registry: bool = False
+    ) -> list[AdapterPackage]:
         packages: list[AdapterPackage] = []
         if not workspace.is_dir():
             return packages
 
         for adaptor_dir in self._iter_adaptor_dirs(workspace):
+            if skip_registry and adaptor_dir.name == REGISTRY_ADAPTER_NAME:
+                continue
             src_dir = adaptor_dir / "src"
             if not src_dir.is_dir():
                 continue
@@ -374,9 +497,7 @@ class AdapterRegistry:
 
         nested: list[Path] = []
         for parent in direct:
-            nested.extend(
-                sorted(path for path in parent.iterdir() if path.is_dir())
-            )
+            nested.extend(sorted(path for path in parent.iterdir() if path.is_dir()))
         return [path for path in nested if path.is_dir()]
 
     def _load_module_from_path(
@@ -489,9 +610,7 @@ class AdapterRegistry:
         )
         return package.contract
 
-    def build_dependency_graph(
-        self, packages: list[AdapterPackage]
-    ) -> DependencyGraph:
+    def build_dependency_graph(self, packages: list[AdapterPackage]) -> DependencyGraph:
         """Build topological ordering of adapter dependencies."""
         return build_dependency_graph(packages)
 
@@ -541,9 +660,7 @@ class AdapterRegistry:
                 failed.append(name)
                 if name in sys_adapters:
                     raise
-                logger.warning(
-                    "User adapter '%s' failed to load: %s", name, exc
-                )
+                logger.warning("User adapter '%s' failed to load: %s", name, exc)
 
         return loaded, failed
 
