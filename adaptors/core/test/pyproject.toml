@@ -1,0 +1,13 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "chaitya-adapter-test"
+version = "0.1.0a1"
+description = "Test adaptor for exercising all Chaitya Core kernel features."
+requires-python = ">=3.11"
+dependencies = []
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/chaitya_adapter_test"]

@@ -470,13 +470,19 @@ class AdapterRegistry:
 
     def validate(self, package: AdapterPackage) -> ValidationResult:
         """Validate an adapter's contract against kernel requirements."""
-        return validate_contract(package.contract, self.loaded_names)
+        other_names = frozenset(n for n in self.loaded_names if n != package.name)
+        return validate_contract(package.contract, other_names)
 
     async def load(self, package: AdapterPackage) -> AdapterContract:
         """Load an adapter package into the kernel.
 
         Validates the contract first.  Raises ``AdapterLoadError`` on failure.
         """
+        if package.name in self.loaded_names:
+            package.status = AdapterStatus.REJECTED
+            package.error = f"Name collision: adapter '{package.name}' is already loaded."
+            raise AdapterLoadError(package.name, package.error)
+
         result = self.validate(package)
         if not result.valid:
             package.status = AdapterStatus.REJECTED
