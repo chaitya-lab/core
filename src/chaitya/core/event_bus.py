@@ -46,12 +46,30 @@ def _event_matches_filter(event: Event, ef: EventFilter) -> bool:
     return True
 
 
+# Event types that should never be persisted to SQLite.
+# These are high-frequency streaming events that would cause DB lock contention.
+# They are still delivered to in-memory subscribers but not written to disk.
+_STREAM_ONLY_EVENT_TYPES: frozenset[str] = frozenset(
+    {
+        "stdout_chunk",
+        "stderr_chunk",
+        "progress_update",
+        "file_changed",
+    }
+)
+
+
 class SqliteEventBus:
     """SQLite-backed pub/sub event bus.
 
-    - All emitted events are persisted to an SQLite events table.
+    - All emitted events are persisted to an SQLite events table (except
+      high-frequency stream events: stdout_chunk, stderr_chunk, etc.).
     - In-memory subscriptions are matched on emit; handlers are invoked async.
     - Rate limiting via max_events_per_second (default 1000).
+    - Writes are batched: events are buffered in memory and flushed to SQLite
+      every ``batch_flush_seconds`` (default 0.5s) or when the buffer reaches
+      ``batch_size`` (default 100 events).  This avoids per-event commits and
+      reduces SQLite lock contention under high load.
     - History queries use EventFilter for structured lookups.
     """
 
@@ -60,22 +78,30 @@ class SqliteEventBus:
         db_path: str | Path = ":memory:",
         *,
         max_events_per_second: int = 1000,
+        batch_size: int = 100,
+        batch_flush_seconds: float = 0.5,
     ) -> None:
         self._db_path = str(db_path)
         self._max_eps = max_events_per_second
+        self._batch_size = batch_size
+        self._batch_flush_seconds = batch_flush_seconds
         self._db: aiosqlite.Connection | None = None
         self._subscriptions: dict[str, _SubscriptionEntry] = {}
         self._lock = asyncio.Lock()
         # Rate-limit state
         self._window_start: float = 0.0
         self._window_count: int = 0
+        # Batch-write state
+        self._pending_rows: list[tuple[Any, ...]] = []
+        self._flush_task: asyncio.Task[None] | None = None
+        self._flush_lock = asyncio.Lock()
 
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
 
     async def open(self) -> None:
-        """Open the database and create the events table."""
+        """Open the database, create the events table, and start the flush task."""
         self._db = await aiosqlite.connect(self._db_path)
         await self._db.execute("PRAGMA journal_mode=WAL")
         await self._db.execute(
@@ -94,9 +120,7 @@ class SqliteEventBus:
             )
             """
         )
-        await self._db.execute(
-            "CREATE INDEX IF NOT EXISTS idx_events_type ON events (type)"
-        )
+        await self._db.execute("CREATE INDEX IF NOT EXISTS idx_events_type ON events (type)")
         await self._db.execute(
             "CREATE INDEX IF NOT EXISTS idx_events_session ON events (session_id)"
         )
@@ -107,14 +131,30 @@ class SqliteEventBus:
             "CREATE INDEX IF NOT EXISTS idx_events_request_id ON events (request_id)"
         )
         await self._db.commit()
-        logger.info("Event bus opened (db=%s)", self._db_path)
+        self._flush_task = asyncio.create_task(self._flush_loop())
+        logger.info(
+            "Event bus opened (db=%s, batch=%d, flush=%.1fs)",
+            self._db_path,
+            self._batch_size,
+            self._batch_flush_seconds,
+        )
 
     async def close(self) -> None:
-        """Close the database connection."""
+        """Flush pending events and close the database connection."""
+        if self._flush_task:
+            self._flush_task.cancel()
+            try:
+                await self._flush_task
+            except asyncio.CancelledError:
+                pass
+            self._flush_task = None
+        # Final flush of any remaining events
+        await self._flush_to_db()
         if self._db:
             await self._db.close()
             self._db = None
         self._subscriptions.clear()
+        self._pending_rows.clear()
         logger.info("Event bus closed")
 
     # ------------------------------------------------------------------
@@ -122,7 +162,7 @@ class SqliteEventBus:
     # ------------------------------------------------------------------
 
     async def emit(self, event: Event) -> None:
-        """Publish an event: persist to SQLite, then deliver to subscribers."""
+        """Publish an event: batch-persist to SQLite (except stream events), deliver to subscribers."""
         if self._db is None:
             raise RuntimeError("Event bus not open — call open() first")
 
@@ -140,25 +180,30 @@ class SqliteEventBus:
             )
             return
 
-        # Persist
-        payload_json = json.dumps(event.payload, default=str)
-        await self._db.execute(
-            """
-            INSERT OR IGNORE INTO events
-                (event_id, type, source_adapter, timestamp, session_id,
-                 exit_code, duration_ms, payload, parent_event_id, request_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                event.event_id, event.type, event.source_adapter,
-                event.timestamp, event.session_id, event.exit_code,
-                event.duration_ms, payload_json, event.parent_event_id,
+        # Persist to SQLite only if NOT a stream-only event type.
+        # Stream events (stdout_chunk, stderr_chunk, etc.) are high-frequency
+        # and would cause SQLite lock contention. They are still delivered
+        # to in-memory subscribers but not written to disk.
+        if event.type not in _STREAM_ONLY_EVENT_TYPES:
+            payload_json = json.dumps(event.payload, default=str)
+            row = (
+                event.event_id,
+                event.type,
+                event.source_adapter,
+                event.timestamp,
+                event.session_id,
+                event.exit_code,
+                event.duration_ms,
+                payload_json,
+                event.parent_event_id,
                 event.request_id,
-            ),
-        )
-        await self._db.commit()
+            )
+            async with self._flush_lock:
+                self._pending_rows.append(row)
+                if len(self._pending_rows) >= self._batch_size:
+                    await self._flush_to_db_unlocked()
 
-        # Deliver to matching subscribers (fire-and-forget)
+        # Deliver to matching subscribers immediately (fire-and-forget)
         for entry in list(self._subscriptions.values()):
             if not entry.subscription.active:
                 continue
@@ -172,6 +217,40 @@ class SqliteEventBus:
                         "Subscriber %s handler error",
                         entry.subscription.subscription_id,
                     )
+
+    async def _flush_to_db(self) -> None:
+        """Flush all pending rows to SQLite (called with lock held)."""
+        async with self._flush_lock:
+            await self._flush_to_db_unlocked()
+
+    async def _flush_to_db_unlocked(self) -> None:
+        """Flush pending rows to SQLite. Must be called with _flush_lock held."""
+        if not self._pending_rows or self._db is None:
+            return
+        rows = self._pending_rows
+        self._pending_rows = []
+        try:
+            await self._db.executemany(
+                """
+                INSERT OR IGNORE INTO events
+                    (event_id, type, source_adapter, timestamp, session_id,
+                     exit_code, duration_ms, payload, parent_event_id, request_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                rows,
+            )
+            await self._db.commit()
+            logger.debug("Flushed %d events to SQLite", len(rows))
+        except Exception as exc:
+            logger.error("Failed to flush %d events to SQLite: %s", len(rows), exc)
+            # Put rows back on failure (best-effort)
+            self._pending_rows = rows + self._pending_rows
+
+    async def _flush_loop(self) -> None:
+        """Background task: flush pending rows to SQLite periodically."""
+        while True:
+            await asyncio.sleep(self._batch_flush_seconds)
+            await self._flush_to_db()
 
     async def subscribe(
         self,
@@ -191,9 +270,16 @@ class SqliteEventBus:
         logger.debug("Subscription %s removed", subscription.subscription_id)
 
     async def history(self, event_filter: EventFilter) -> list[Event]:
-        """Query historical events matching the filter."""
+        """Query historical events matching the filter.
+
+        Flushes pending batched rows before querying so that recent events
+        not yet written to SQLite are included in results.
+        """
         if self._db is None:
             raise RuntimeError("Event bus not open — call open() first")
+
+        # Ensure any pending batched events are written to SQLite first
+        await self._flush_to_db()
 
         query = "SELECT * FROM events WHERE 1=1"
         params: list[Any] = []
@@ -252,6 +338,7 @@ class SqliteEventBus:
         """Return total number of persisted events (for diagnostics)."""
         if self._db is None:
             return 0
+        await self._flush_to_db()
         async with self._db.execute("SELECT COUNT(*) FROM events") as cursor:
             row = await cursor.fetchone()
             return row[0] if row else 0

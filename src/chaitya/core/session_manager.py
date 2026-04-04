@@ -347,7 +347,11 @@ class SessionManager:
         )
 
     async def _stuck_monitor_loop(self) -> None:
-        """Background loop that detects stuck sessions."""
+        """Background loop that detects stuck sessions.
+
+        Verifies the session still exists in the backend before marking it stuck.
+        If the backend pane is gone (e.g. tmux killed externally), marks DEAD instead.
+        """
         while True:
             await asyncio.sleep(10)  # check every 10 seconds
             now = datetime.now(UTC)
@@ -356,14 +360,28 @@ class SessionManager:
                 if elapsed >= self._stuck_threshold:
                     record = await self._store.get_session(name)
                     if record and record.state == SessionState.BUSY:
-                        record.state = SessionState.STUCK
-                        await self._store.save_session(record)
-                        await self._bus.emit(
-                            Event(
-                                type=SESSION_STUCK,
-                                source_adapter="kernel",
-                                session_id=name,
-                                payload={"idle_seconds": int(elapsed)},
+                        # Check if the backend pane still exists
+                        try:
+                            exists = await self._backend.exists(name)
+                        except Exception:
+                            exists = False
+                        if not exists:
+                            # Session was killed externally (e.g. tmux died)
+                            await self._mark_dead(name)
+                            logger.warning(
+                                "Session %s marked dead (backend pane gone after %ds idle)",
+                                name,
+                                int(elapsed),
                             )
-                        )
-                        logger.warning("Session %s stuck (%ds idle)", name, int(elapsed))
+                        else:
+                            record.state = SessionState.STUCK
+                            await self._store.save_session(record)
+                            await self._bus.emit(
+                                Event(
+                                    type=SESSION_STUCK,
+                                    source_adapter="kernel",
+                                    session_id=name,
+                                    payload={"idle_seconds": int(elapsed)},
+                                )
+                            )
+                            logger.warning("Session %s stuck (%ds idle)", name, int(elapsed))

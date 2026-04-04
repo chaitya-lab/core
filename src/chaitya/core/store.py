@@ -116,11 +116,13 @@ class SqliteStore:
         """Create or update a session record."""
         if self._db is None:
             raise RuntimeError("Store not open")
-        identity_json = json.dumps({
-            "env_vars": record.identity.env_vars,
-            "working_dir": record.identity.working_dir,
-            "browser_profile": record.identity.browser_profile,
-        })
+        identity_json = json.dumps(
+            {
+                "env_vars": record.identity.env_vars,
+                "working_dir": record.identity.working_dir,
+                "browser_profile": record.identity.browser_profile,
+            }
+        )
         metadata_json = json.dumps(record.metadata, default=str)
         await self._db.execute(
             """
@@ -136,9 +138,13 @@ class SqliteStore:
                 last_activity = excluded.last_activity
             """,
             (
-                record.name, record.state.value, record.template,
-                identity_json, metadata_json,
-                record.created_at, record.last_activity,
+                record.name,
+                record.state.value,
+                record.template,
+                identity_json,
+                metadata_json,
+                record.created_at,
+                record.last_activity,
             ),
         )
         await self._db.commit()
@@ -147,9 +153,7 @@ class SqliteStore:
         """Retrieve a session record by name."""
         if self._db is None:
             raise RuntimeError("Store not open")
-        async with self._db.execute(
-            "SELECT * FROM sessions WHERE name = ?", (name,)
-        ) as cursor:
+        async with self._db.execute("SELECT * FROM sessions WHERE name = ?", (name,)) as cursor:
             row = await cursor.fetchone()
             if row is None:
                 return None
@@ -160,9 +164,7 @@ class SqliteStore:
         if self._db is None:
             raise RuntimeError("Store not open")
         sessions: list[SessionRecord] = []
-        async with self._db.execute(
-            "SELECT * FROM sessions ORDER BY created_at"
-        ) as cursor:
+        async with self._db.execute("SELECT * FROM sessions ORDER BY created_at") as cursor:
             async for row in cursor:
                 sessions.append(self._row_to_session(row))
         return sessions
@@ -274,6 +276,9 @@ class SqliteStore:
         """
         if self._event_bus._db is None:
             raise RuntimeError("Store not open")
+
+        # Flush pending batched events so search includes recent events
+        await self._event_bus._flush_to_db()
 
         sql = "SELECT * FROM events WHERE payload LIKE ?"
         params: list[Any] = [f"%{query}%"]

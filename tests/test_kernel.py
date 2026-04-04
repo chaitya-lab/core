@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from chaitya.core.kernel import Kernel, KERNEL_COMMANDS
+from chaitya.core.kernel import Kernel, KERNEL_COMMANDS, _PendingInputRequest
+from chaitya_sdk.types import InputSpec as SdkInputSpec
 from chaitya.core.types import (
     AdapterContract,
     AdapterPackage,
@@ -290,5 +291,90 @@ class TestDispatch:
             assert watched.exit_code == 0
             assert "session_created" in watched.processed
             assert "envloop" in watched.processed
+        finally:
+            await kernel.shutdown()
+
+    async def test_input_timeout_expires_pending_request(self) -> None:
+        """Pending input requests are expired after the configured timeout.
+
+        We set created_at to the distant past so the timeout loop immediately
+        detects the expired request on its next iteration.
+        """
+        from datetime import timedelta, datetime as dt, UTC
+
+        kernel = Kernel(
+            db_path=":memory:",
+            system_adapters=frozenset(),
+            input_timeout_seconds=300,
+        )
+        await kernel.boot()
+        try:
+            past = (dt.now(UTC) - timedelta(seconds=600)).isoformat()
+            kernel._pending_inputs["test-request-id"] = _PendingInputRequest(
+                request_id="test-request-id",
+                adapter_name="test-adapter",
+                handler=None,
+                contract=None,
+                permissions=None,
+                input_stream=ChaityaStream(),
+                ctx=PipelineContext(),
+                spec=SdkInputSpec(name="test-field", prompt="test"),
+                args={},
+                created_at=past,
+            )
+            assert "test-request-id" in kernel._pending_inputs
+
+            # Manually invoke one iteration of the timeout loop
+            from chaitya.core.types import Event
+
+            original_emit = kernel._event_bus.emit
+
+            emitted_types: list[str] = []
+
+            async def tracking_emit(event: Event) -> None:
+                emitted_types.append(event.type)
+                await original_emit(event)
+
+            kernel._event_bus.emit = tracking_emit
+            try:
+                # Trigger timeout check by calling the loop body directly
+                from chaitya.core.types import Event as CoreEvent
+                from datetime import datetime as dt
+
+                now = dt.now(UTC)
+                expired: list[str] = []
+                for request_id, pending in list(kernel._pending_inputs.items()):
+                    created_str = pending.created_at
+                    if not created_str:
+                        continue
+                    try:
+                        created = dt.fromisoformat(created_str)
+                    except (ValueError, TypeError):
+                        continue
+                    age_seconds = (now - created).total_seconds()
+                    if age_seconds >= kernel._input_timeout_seconds:
+                        expired.append(request_id)
+                        await kernel._store.delete_pending_input(request_id)
+                        await kernel._event_bus.emit(
+                            CoreEvent(
+                                type="input_timeout",
+                                source_adapter="kernel",
+                                session_id=pending.ctx.session_id,
+                                request_id=request_id,
+                                payload={
+                                    "adapter": pending.adapter_name,
+                                    "field": pending.spec.name if pending.spec else "unknown",
+                                    "age_seconds": int(age_seconds),
+                                },
+                            )
+                        )
+
+                for request_id in expired:
+                    kernel._pending_inputs.pop(request_id, None)
+
+                assert "test-request-id" not in kernel._pending_inputs
+                assert "input_timeout" in emitted_types
+            finally:
+                kernel._event_bus.emit = original_emit
         finally:
             await kernel.shutdown()

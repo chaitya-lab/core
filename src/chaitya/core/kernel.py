@@ -14,6 +14,7 @@ Reference: PRD §3.1, §3.2, §5
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import logging
 import time
@@ -135,6 +136,7 @@ class _PendingInputRequest:
     ctx: PipelineContext
     spec: SdkInputSpec
     args: dict[str, Any]
+    created_at: str = ""
 
 
 class Kernel:
@@ -161,6 +163,7 @@ class Kernel:
         max_log_size_bytes: int = 1_073_741_824,
         templates_dir: str | None = None,
         registry_adapter_pkg: Any = None,
+        input_timeout_seconds: int = 300,
     ) -> None:
         self._config = config
         self.cli_name = cli_name
@@ -169,6 +172,8 @@ class Kernel:
         self._shutting_down = False
         self._boot_time: float | None = None
         self._pending_inputs: dict[str, _PendingInputRequest] = {}
+        self._input_timeout_seconds: int = input_timeout_seconds
+        self._input_timeout_task: asyncio.Task[None] | None = None
         self._bootstrap_loader = BootstrapLoader()
         self._registry_adapter_pkg: Any = registry_adapter_pkg
 
@@ -333,6 +338,7 @@ class Kernel:
             registry_proxy.set_registry(self._registry)
             self._boot_time = time.monotonic()
             self._booted = True
+            self._input_timeout_task = asyncio.create_task(self._input_timeout_loop())
             await self._event_bus.emit(
                 Event(
                     type=KERNEL_STARTED,
@@ -345,7 +351,7 @@ class Kernel:
                     },
                 )
             )
-            logger.info("Step 10/10: Kernel started — accepting commands")
+            logger.info("Step 11/11: Kernel started — accepting commands")
 
         except AdapterLoadError as exc:
             raise KernelBootError(f"System adapter failed to load: {exc}") from exc
@@ -386,6 +392,15 @@ class Kernel:
                         payload={"uptime_seconds": self.uptime_seconds},
                     )
                 )
+
+            # Cancel input timeout monitor
+            if self._input_timeout_task and not self._input_timeout_task.done():
+                self._input_timeout_task.cancel()
+                try:
+                    await self._input_timeout_task
+                except asyncio.CancelledError:
+                    pass
+                self._input_timeout_task = None
 
             # Stop session manager (cancels stuck monitor)
             await self._session_mgr.stop()
@@ -549,6 +564,7 @@ class Kernel:
                 result = await result
         except SdkSuspension as suspension:
             request_id = str(uuid.uuid4())
+            created_at = datetime.now(UTC).isoformat()
             self._pending_inputs[request_id] = _PendingInputRequest(
                 request_id=request_id,
                 adapter_name=name,
@@ -559,6 +575,33 @@ class Kernel:
                 ctx=ctx,
                 spec=suspension.spec,
                 args=dict(sdk_args),
+                created_at=created_at,
+            )
+            await self._store.save_pending_input(
+                request_id=request_id,
+                adapter_name=name,
+                session_id=ctx.session_id,
+                spec={
+                    "name": suspension.spec.name,
+                    "prompt": suspension.spec.prompt,
+                    "input_type": suspension.spec.input_type.value,
+                    "multiline": suspension.spec.multiline,
+                    "options": suspension.spec.options,
+                    "min_value": suspension.spec.min_value,
+                    "max_value": suspension.spec.max_value,
+                    "default": suspension.spec.default,
+                },
+                args=dict(sdk_args),
+                ctx_env=dict(ctx.env),
+                input_stream={
+                    "content": input_stream.content.decode("utf-8", errors="surrogateescape"),
+                    "declared_type": input_stream.declared_type,
+                    "detected_type": input_stream.detected_type,
+                    "source": input_stream.source,
+                    "size_bytes": input_stream.size_bytes,
+                    "encoding": input_stream.encoding,
+                },
+                created_at=created_at,
             )
             await self._store.save_pending_input(
                 request_id=request_id,
@@ -769,7 +812,58 @@ class Kernel:
                     default=spec_raw.get("default"),
                 ),
                 args=item["args"],
+                created_at=item.get("created_at", ""),
             )
+
+    async def _input_timeout_loop(self) -> None:
+        """Background monitor: expire pending input requests after timeout.
+
+        If a suspension's request is not responded to within
+        ``self._input_timeout_seconds``, the pending request is cancelled and
+        the ``input_timeout`` event is emitted.  This prevents adapters from
+        hanging indefinitely when a daemon crashes or the user never responds.
+        """
+        while True:
+            await asyncio.sleep(10)
+            if self._shutting_down:
+                return
+            now = datetime.now(UTC)
+            expired: list[str] = []
+            for request_id, pending in list(self._pending_inputs.items()):
+                created_str = pending.created_at
+                if not created_str:
+                    continue
+                try:
+                    created = datetime.fromisoformat(created_str)
+                except (ValueError, TypeError):
+                    continue
+                age_seconds = (now - created).total_seconds()
+                if age_seconds >= self._input_timeout_seconds:
+                    expired.append(request_id)
+                    logger.warning(
+                        "Input request %s expired after %ds (adapter=%s, field=%s)",
+                        request_id,
+                        int(age_seconds),
+                        pending.adapter_name,
+                        pending.spec.name,
+                    )
+                    await self._store.delete_pending_input(request_id)
+                    await self._event_bus.emit(
+                        Event(
+                            type="input_timeout",
+                            source_adapter="kernel",
+                            session_id=pending.ctx.session_id,
+                            request_id=request_id,
+                            payload={
+                                "adapter": pending.adapter_name,
+                                "field": pending.spec.name,
+                                "age_seconds": int(age_seconds),
+                            },
+                        )
+                    )
+
+            for request_id in expired:
+                self._pending_inputs.pop(request_id, None)
 
     async def _handle_info(
         self, input_stream: ChaityaStream, ctx: PipelineContext

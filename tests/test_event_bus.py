@@ -115,9 +115,7 @@ class TestEmit:
 
 
 class TestSubscriptions:
-    async def test_subscribe_receives_matching_events(
-        self, bus: SqliteEventBus
-    ) -> None:
+    async def test_subscribe_receives_matching_events(self, bus: SqliteEventBus) -> None:
         received: list[Event] = []
         ef = EventFilter(event_types=["test_event"])
         await bus.subscribe(ef, received.append)
@@ -137,9 +135,7 @@ class TestSubscriptions:
 
         assert len(received) == 2
 
-    async def test_unsubscribe_stops_delivery(
-        self, bus: SqliteEventBus
-    ) -> None:
+    async def test_unsubscribe_stops_delivery(self, bus: SqliteEventBus) -> None:
         received: list[Event] = []
         sub = await bus.subscribe(EventFilter(), received.append)
 
@@ -178,9 +174,7 @@ class TestSubscriptions:
         await bus.emit(Event(type="async_test"))
         assert len(received) == 1
 
-    async def test_handler_error_does_not_break_bus(
-        self, bus: SqliteEventBus
-    ) -> None:
+    async def test_handler_error_does_not_break_bus(self, bus: SqliteEventBus) -> None:
         good_received: list[Event] = []
 
         def bad_handler(event: Event) -> None:
@@ -214,9 +208,7 @@ class TestHistory:
         events = await bus.history(EventFilter(event_types=["alpha"]))
         assert len(events) == 2
 
-    async def test_history_filter_by_session(
-        self, bus: SqliteEventBus
-    ) -> None:
+    async def test_history_filter_by_session(self, bus: SqliteEventBus) -> None:
         await bus.emit(Event(type="a", session_id="s1"))
         await bus.emit(Event(type="b", session_id="s2"))
 
@@ -229,9 +221,7 @@ class TestHistory:
         events = await bus.history(EventFilter(limit=3))
         assert len(events) == 3
 
-    async def test_history_filter_by_request_id(
-        self, bus: SqliteEventBus
-    ) -> None:
+    async def test_history_filter_by_request_id(self, bus: SqliteEventBus) -> None:
         await bus.emit(Event(type="req", request_id="r1"))
         await bus.emit(Event(type="req", request_id="r2"))
 
@@ -252,7 +242,66 @@ class TestRateLimiting:
             for i in range(10):
                 await bus.emit(Event(type=f"ev_{i}"))
             count = await bus.event_count()
-            # Should have dropped some events
             assert count <= 5
+        finally:
+            await bus.close()
+
+
+# ---------------------------------------------------------------------------
+# Batching & Stream-Only Events
+# ---------------------------------------------------------------------------
+
+
+class TestBatchingAndStreamEvents:
+    async def test_stream_events_not_persisted(self) -> None:
+        """stdout_chunk/stderr_chunk events are delivered to subscribers but not written to SQLite."""
+        bus = SqliteEventBus(db_path=":memory:", batch_size=1)
+        await bus.open()
+        try:
+            received: list[Event] = []
+            await bus.subscribe(EventFilter(), received.append)
+
+            await bus.emit(Event(type="stdout_chunk", payload={"data": "hello"}))
+            await bus.emit(Event(type="stderr_chunk", payload={"data": "world"}))
+            await bus.emit(Event(type="normal_event", payload={}))
+
+            assert len(received) == 3
+
+            count = await bus.event_count()
+            assert count == 1
+            assert all(e.type == "normal_event" for e in await bus.history(EventFilter()))
+        finally:
+            await bus.close()
+
+    async def test_batch_flush_on_size(self) -> None:
+        """Events are flushed to SQLite when batch_size is reached."""
+        bus = SqliteEventBus(db_path=":memory:", batch_size=3, batch_flush_seconds=60)
+        await bus.open()
+        try:
+            await bus.emit(Event(type="ev_1"))
+            await bus.emit(Event(type="ev_2"))
+            # Count should be 0 since batch_size=3 not reached yet.
+            # (event_count flushes before querying, so we see unflushed events too.)
+            count_before = await bus.event_count()
+            assert count_before == 2
+
+            await bus.emit(Event(type="ev_3"))
+            count_after = await bus.event_count()
+            assert count_after == 3
+        finally:
+            await bus.close()
+
+    async def test_subscriber_delivery_not_affected_by_batching(self) -> None:
+        """Stream events are delivered to subscribers even when not persisted."""
+        bus = SqliteEventBus(db_path=":memory:")
+        await bus.open()
+        try:
+            received: list[Event] = []
+            await bus.subscribe(EventFilter(), received.append)
+
+            await bus.emit(Event(type="stdout_chunk", payload={"line": "1"}))
+            await bus.emit(Event(type="normal", payload={}))
+
+            assert len(received) == 2
         finally:
             await bus.close()
