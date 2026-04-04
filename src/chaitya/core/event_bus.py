@@ -203,7 +203,8 @@ class SqliteEventBus:
                 if len(self._pending_rows) >= self._batch_size:
                     await self._flush_to_db_unlocked()
 
-        # Deliver to matching subscribers immediately (fire-and-forget)
+        # Deliver to matching subscribers immediately.
+        # Async handlers are awaited inline (they should be fast).
         for entry in list(self._subscriptions.values()):
             if not entry.subscription.active:
                 continue

@@ -139,6 +139,9 @@ class _PendingInputRequest:
     created_at: str = ""
 
 
+_instance: "Kernel | None" = None
+
+
 class Kernel:
     """Chaitya microkernel — the central orchestrator.
 
@@ -267,8 +270,11 @@ class Kernel:
 
         Raises KernelBootError on system-level failures.
         """
+        global _instance
         if self._booted:
             raise KernelBootError("Kernel is already booted")
+
+        _instance = self
 
         logger.info("Kernel boot sequence starting...")
         boot_start = time.monotonic()
@@ -367,9 +373,11 @@ class Kernel:
         6. Emit kernel_shutting_down
         7. Close all subsystems
         """
+        global _instance
         if self._shutting_down:
             return
         self._shutting_down = True
+        _instance = None
         logger.info("Kernel shutdown sequence starting...")
 
         try:

@@ -250,9 +250,7 @@ class Event:
     event_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     type: str = ""
     source_adapter: str = ""
-    timestamp: str = field(
-        default_factory=lambda: datetime.now(UTC).isoformat()
-    )
+    timestamp: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
     session_id: str | None = None
     exit_code: int | None = None
     duration_ms: int | None = None
@@ -277,6 +275,55 @@ SESSION_STUCK = "session_stuck"
 SESSION_DEAD = "session_dead"
 
 # Adapter convention events
+# ---------------------------------------------------------------------------
+# Event Bus — Filter & Subscription
+# ---------------------------------------------------------------------------
+
+
+class EventFilter:
+    """Filter criteria for event queries and subscriptions (SDK view)."""
+
+    event_types: list[str] | None = None
+    source_adapter: str | None = None
+    session_id: str | None = None
+    request_id: str | None = None
+    limit: int | None = None
+
+    def __init__(
+        self,
+        event_types: list[str] | None = None,
+        source_adapter: str | None = None,
+        session_id: str | None = None,
+        request_id: str | None = None,
+        limit: int | None = None,
+    ) -> None:
+        self.event_types = event_types
+        self.source_adapter = source_adapter
+        self.session_id = session_id
+        self.request_id = request_id
+        self.limit = limit
+
+
+class Subscription:
+    """Handle to an active event bus subscription."""
+
+    def __init__(
+        self,
+        subscription_id: str | None = None,
+        filter: EventFilter | None = None,
+    ) -> None:
+        self.subscription_id = subscription_id or str(uuid.uuid4())
+        self.filter = filter or EventFilter()
+        self.active = True
+
+    def cancel(self) -> None:
+        self.active = False
+
+
+# ---------------------------------------------------------------------------
+# Event type constants
+# ---------------------------------------------------------------------------
+
 PROCESS_EXIT = "process_exit"
 STDOUT_CHUNK = "stdout_chunk"
 STDERR_CHUNK = "stderr_chunk"
@@ -308,4 +355,3 @@ class PermissionDenied(Exception):
             f"PermissionDenied: adapter '{adapter}' cannot {action}"
             + (f" — {detail}" if detail else "")
         )
-

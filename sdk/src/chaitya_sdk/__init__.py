@@ -55,6 +55,7 @@ from chaitya_sdk.types import (  # noqa: F401
     CommandSpec,
     # Event (read-only view)
     Event,
+    EventFilter,
     # Suspension system
     InputSpec,
     InputType,
@@ -66,6 +67,7 @@ from chaitya_sdk.types import (  # noqa: F401
     SessionContext,
     SessionState,
     ShutdownPolicy,
+    Subscription,
     Suspension,
 )
 
@@ -96,6 +98,8 @@ __all__ = [
     "ResourceLimits",
     # Event
     "Event",
+    "EventFilter",
+    "Subscription",
     # Event constants
     "ADAPTER_LOADED",
     "ADAPTER_REJECTED",
