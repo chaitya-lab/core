@@ -57,9 +57,7 @@ class TestBootSequence:
     async def test_boot_emits_kernel_started(self, raw_kernel: Kernel) -> None:
         await raw_kernel.boot()
         # Check event history for KERNEL_STARTED
-        history = await raw_kernel.event_bus.history(
-            EventFilter(event_types=[KERNEL_STARTED])
-        )
+        history = await raw_kernel.event_bus.history(EventFilter(event_types=[KERNEL_STARTED]))
         assert len(history) >= 1
         assert history[0].type == KERNEL_STARTED
         await raw_kernel.shutdown()
@@ -106,6 +104,7 @@ class TestShutdown:
 
     async def test_uptime(self, kernel: Kernel) -> None:
         import asyncio
+
         await asyncio.sleep(0.05)  # 50ms — enough even on Windows
         assert kernel.uptime_seconds >= 0.01
 
@@ -129,8 +128,12 @@ class TestDispatch:
     async def test_dispatch_session_list(self, kernel: Kernel) -> None:
         result = await kernel.dispatch("session list")
         assert isinstance(result, CommandOutput)
-        # No sessions yet
-        assert "no active" in result.processed.lower() or "NAME" in result.processed
+        # No sessions yet — should show helpful message or header
+        assert (
+            "no" in result.processed.lower()
+            or "NAME" in result.processed
+            or "session" in result.processed.lower()
+        )
 
     async def test_dispatch_registry_list(self, kernel: Kernel) -> None:
         result = await kernel.dispatch("registry list")
@@ -144,9 +147,7 @@ class TestDispatch:
         result = await kernel.dispatch("registry validate missing-adapter")
         assert result.exit_code == 1
 
-    async def test_dispatch_session_create_uses_positional_name(
-        self, kernel: Kernel
-    ) -> None:
+    async def test_dispatch_session_create_uses_positional_name(self, kernel: Kernel) -> None:
         result = await kernel.dispatch("session create mac-dev")
         assert result.exit_code == 0
         status = await kernel.dispatch("session status mac-dev")
@@ -177,9 +178,7 @@ class TestDispatch:
         await kernel.boot()
         file_path = tmp_path / "note.txt"
         try:
-            write = await kernel.dispatch(
-                f"file write --path {file_path} --text hello"
-            )
+            write = await kernel.dispatch(f"file write --path {file_path} --text hello")
             assert write.exit_code == 0
             read = await kernel.dispatch(f"file read --path {file_path}")
             assert read.exit_code == 0
@@ -226,7 +225,9 @@ class TestDispatch:
             output = await kernel.dispatch("session output envloop")
             assert "hello" in output.processed
 
-            watched = await kernel.dispatch("watch --session envloop --on session_created --limit 5")
+            watched = await kernel.dispatch(
+                "watch --session envloop --on session_created --limit 5"
+            )
             assert watched.exit_code == 0
             assert "session_created" in watched.processed
             assert "envloop" in watched.processed

@@ -48,11 +48,11 @@ def file_handler(stream: ChaityaStream, ctx: SessionContext) -> tuple[bytes, int
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(str(text), encoding="utf-8")
-            return f"Wrote {path}".encode("utf-8"), 0
+            return f"Wrote {path}".encode(), 0
         except Exception as exc:
             return str(exc).encode("utf-8"), 1
 
-    return f"Unknown file subcommand: {subcommand}".encode("utf-8"), 1
+    return f"Unknown file subcommand: {subcommand}".encode(), 1
 
 
 __chaitya_handler__ = file_handler

@@ -143,13 +143,13 @@ class TmuxSessionBackend:
     async def set_env(self, name: str, key: str, value: str) -> None:
         await self._ensure_exists(name)
         await self._run_tmux("set-environment", "-t", name, key, value)
-        await self.send_input(name, f"export {key}={shlex.quote(value)}\n".encode("utf-8"))
+        await self.send_input(name, f"export {key}={shlex.quote(value)}\n".encode())
         self._env_vars.setdefault(name, {})[key] = value
 
     async def unset_env(self, name: str, key: str) -> None:
         await self._ensure_exists(name)
         await self._run_tmux("set-environment", "-u", "-t", name, key)
-        await self.send_input(name, f"unset {key}\n".encode("utf-8"))
+        await self.send_input(name, f"unset {key}\n".encode())
         self._env_vars.setdefault(name, {}).pop(key, None)
 
     async def _ensure_exists(self, name: str) -> None:

@@ -14,7 +14,6 @@ from typing import Protocol, runtime_checkable
 from chaitya.core.types import (
     AdapterContract,
     AdapterPackage,
-    ChaityaStream,
     CommandChain,
     DependencyGraph,
     Event,
@@ -27,7 +26,6 @@ from chaitya.core.types import (
     Subscription,
     ValidationResult,
 )
-
 
 # ---------------------------------------------------------------------------
 # 1. SessionBackend Protocol (PRD §3.3, §13)

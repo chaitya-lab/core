@@ -12,21 +12,20 @@ from __future__ import annotations
 
 import importlib
 import importlib.util
-import sys
 import json
 import logging
+import sys
+from collections.abc import Callable
 from importlib.metadata import entry_points
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
-from chaitya.core.protocols import AdapterLoaderProtocol
 from chaitya.core.types import (
     AdapterContract,
     AdapterLoadError,
     AdapterPackage,
     AdapterPermissions,
     AdapterStatus,
-    AdapterType,
     CommandSpec,
     DependencyGraph,
     OutputRoutingRule,

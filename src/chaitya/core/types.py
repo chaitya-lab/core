@@ -11,10 +11,10 @@ from __future__ import annotations
 
 import enum
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import Any, Callable
-
+from datetime import UTC, datetime
+from typing import Any
 
 # ---------------------------------------------------------------------------
 # Enums
@@ -135,7 +135,7 @@ class Event:
     type: str = ""
     source_adapter: str = ""
     timestamp: str = field(
-        default_factory=lambda: datetime.now(timezone.utc).isoformat()
+        default_factory=lambda: datetime.now(UTC).isoformat()
     )
     session_id: str | None = None
     exit_code: int | None = None
@@ -201,10 +201,10 @@ class SessionRecord:
     identity: SessionIdentity = field(default_factory=SessionIdentity)
     metadata: dict[str, Any] = field(default_factory=dict)
     created_at: str = field(
-        default_factory=lambda: datetime.now(timezone.utc).isoformat()
+        default_factory=lambda: datetime.now(UTC).isoformat()
     )
     last_activity: str = field(
-        default_factory=lambda: datetime.now(timezone.utc).isoformat()
+        default_factory=lambda: datetime.now(UTC).isoformat()
     )
 
 
@@ -512,5 +512,5 @@ class CommandOutput:
     stderr: str = ""
     session_id: str | None = None
     timestamp: str = field(
-        default_factory=lambda: datetime.now(timezone.utc).isoformat()
+        default_factory=lambda: datetime.now(UTC).isoformat()
     )

@@ -10,7 +10,8 @@ This module also provides permission-checked wrappers.
 from __future__ import annotations
 
 import logging
-from typing import Any, Callable, Protocol
+from collections.abc import Callable
+from typing import Any, Protocol
 
 from chaitya_sdk.types import (
     AdapterPermissions,

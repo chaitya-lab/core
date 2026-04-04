@@ -18,7 +18,6 @@ import shlex
 import signal
 import sys
 from collections.abc import AsyncIterator
-from typing import Any
 
 from chaitya.core.types import (
     SessionHandle,
@@ -101,7 +100,7 @@ class LocalProcessBackend:
         try:
             session.process.terminate()
             await asyncio.wait_for(session.process.wait(), timeout=5.0)
-        except (ProcessLookupError, asyncio.TimeoutError):
+        except (TimeoutError, ProcessLookupError):
             try:
                 session.process.kill()
             except ProcessLookupError:
@@ -168,7 +167,7 @@ class LocalProcessBackend:
         session.identity.env_vars[key] = value
         if session.process.stdin is not None:
             session.process.stdin.write(
-                f"export {key}={shlex.quote(value)}\n".encode("utf-8")
+                f"export {key}={shlex.quote(value)}\n".encode()
             )
             await session.process.stdin.drain()
 
@@ -178,7 +177,7 @@ class LocalProcessBackend:
         session.env.pop(key, None)
         session.identity.env_vars.pop(key, None)
         if session.process.stdin is not None:
-            session.process.stdin.write(f"unset {key}\n".encode("utf-8"))
+            session.process.stdin.write(f"unset {key}\n".encode())
             await session.process.stdin.drain()
 
     def _require(self, name: str) -> _LocalSession:

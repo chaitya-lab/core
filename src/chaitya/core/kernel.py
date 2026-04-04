@@ -14,21 +14,42 @@ Reference: PRD §3.1, §3.2, §5
 
 from __future__ import annotations
 
-import asyncio
 import inspect
 import logging
-import signal
 import time
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+
+from chaitya_sdk.context import event_bus as sdk_event_bus
+from chaitya_sdk.types import (
+    AdapterPermissions as SdkAdapterPermissions,
+)
+from chaitya_sdk.types import (
+    ChaityaStream as SdkChaityaStream,
+)
+from chaitya_sdk.types import (
+    InputSpec as SdkInputSpec,
+)
+from chaitya_sdk.types import (
+    InputType as SdkInputType,
+)
+from chaitya_sdk.types import (
+    SessionContext as SdkSessionContext,
+)
+from chaitya_sdk.types import (
+    SessionState as SdkSessionState,
+)
+from chaitya_sdk.types import (
+    Suspension as SdkSuspension,
+)
 
 from chaitya.core import __version__
 from chaitya.core.backends.local import LocalProcessBackend
 from chaitya.core.backends.tmux import TmuxSessionBackend
-from chaitya.core.config import CoreConfig, load_config
+from chaitya.core.config import CoreConfig
 from chaitya.core.event_bus import SqliteEventBus
 from chaitya.core.pipeline import AdapterHandler, PipelineOrchestrator
 from chaitya.core.registry import AdapterRegistry
@@ -39,31 +60,18 @@ from chaitya.core.types import (
     ADAPTER_REJECTED,
     INPUT_REQUESTED,
     INPUT_RESPONSE,
-    KERNEL_STARTED,
     KERNEL_SHUTTING_DOWN,
+    KERNEL_STARTED,
     SESSION_RESUMED,
     AdapterLoadError,
-    AdapterPackage,
-    AdapterStatus,
+    AdapterPermissions,
     ChaityaStream,
-    CommandChain,
     CommandOutput,
     Event,
     EventFilter,
     KernelBootError,
     PipelineContext,
     SessionState,
-    AdapterPermissions,
-)
-from chaitya_sdk.context import event_bus as sdk_event_bus
-from chaitya_sdk.types import (
-    AdapterPermissions as SdkAdapterPermissions,
-    ChaityaStream as SdkChaityaStream,
-    InputSpec as SdkInputSpec,
-    InputType as SdkInputType,
-    SessionContext as SdkSessionContext,
-    SessionState as SdkSessionState,
-    Suspension as SdkSuspension,
 )
 
 logger = logging.getLogger(__name__)
@@ -150,6 +158,7 @@ class Kernel:
         stuck_threshold_seconds: int = 60,
         max_events_per_second: int = 1000,
         max_log_size_bytes: int = 1_073_741_824,
+        templates_dir: str | None = None,
     ) -> None:
         self._config = config
         self.cli_name = cli_name
@@ -173,12 +182,13 @@ class Kernel:
             store=self._store,
             event_bus=self._event_bus,
             stuck_threshold_seconds=stuck_threshold_seconds,
+            templates_dir=templates_dir,
         )
         self._pipeline = PipelineOrchestrator(overflow_dir=overflow_dir)
         self._registry = AdapterRegistry(search_paths=adapter_search_paths or [])
 
     @classmethod
-    def from_config(cls, config: CoreConfig) -> "Kernel":
+    def from_config(cls, config: CoreConfig) -> Kernel:
         """Create a Kernel from a CoreConfig object."""
         return cls(
             config=config,
@@ -194,6 +204,7 @@ class Kernel:
             stuck_threshold_seconds=config.session.stuck_threshold_seconds,
             max_events_per_second=config.store.max_events_per_second,
             max_log_size_bytes=config.store.max_log_size_bytes,
+            templates_dir=config.templates_dir or None,
         )
 
     @staticmethod
@@ -204,8 +215,7 @@ class Kernel:
         if backend == "tmux":
             return TmuxSessionBackend()
         raise ValueError(
-            f"Unsupported session backend {session_backend!r}. "
-            "Supported backends: local, tmux."
+            f"Unsupported session backend {session_backend!r}. Supported backends: local, tmux."
         )
 
     # -- Public properties --
@@ -267,9 +277,7 @@ class Kernel:
 
             # Step 4: Bootstrap adapter registry (discover installed adapters)
             packages = await self._registry.discover()
-            logger.info(
-                "Step 4/10: Discovered %d adapter package(s)", len(packages)
-            )
+            logger.info("Step 4/10: Discovered %d adapter package(s)", len(packages))
 
             # Step 5: Build dependency graph
             graph = self._registry.build_dependency_graph(packages)
@@ -284,13 +292,9 @@ class Kernel:
                 packages, system_adapters=self._system_adapters
             )
             for name in loaded:
-                await self._event_bus.emit(
-                    Event(type=ADAPTER_LOADED, payload={"adapter": name})
-                )
+                await self._event_bus.emit(Event(type=ADAPTER_LOADED, payload={"adapter": name}))
             for name in failed:
-                await self._event_bus.emit(
-                    Event(type=ADAPTER_REJECTED, payload={"adapter": name})
-                )
+                await self._event_bus.emit(Event(type=ADAPTER_REJECTED, payload={"adapter": name}))
             logger.info(
                 "Steps 6-7/10: Loaded %d adapter(s), %d failed",
                 len(loaded),
@@ -318,18 +322,14 @@ class Kernel:
                         "version": __version__,
                         "adapters_loaded": loaded,
                         "adapters_failed": failed,
-                        "boot_ms": int(
-                            (time.monotonic() - boot_start) * 1000
-                        ),
+                        "boot_ms": int((time.monotonic() - boot_start) * 1000),
                     },
                 )
             )
             logger.info("Step 10/10: Kernel started — accepting commands")
 
         except AdapterLoadError as exc:
-            raise KernelBootError(
-                f"System adapter failed to load: {exc}"
-            ) from exc
+            raise KernelBootError(f"System adapter failed to load: {exc}") from exc
         except KernelBootError:
             raise
         except Exception as exc:
@@ -386,7 +386,8 @@ class Kernel:
         Routes kernel commands internally. Routes everything else
         through the pipeline to adapter handlers.
 
-        Returns the final L2-processed CommandOutput.
+        PRD §3.2: ``{{CLI_NAME}} <adapter>`` with no subcommand is
+        identical to ``{{CLI_NAME}} info <adapter>``.
         """
         if not self._booted:
             raise RuntimeError("Kernel not booted — call boot() first")
@@ -395,6 +396,16 @@ class Kernel:
 
         chain = self._pipeline.parse_chain(expression)
         ctx = PipelineContext()
+
+        expr = expression.strip()
+        parts = expr.split()
+        if (
+            len(parts) == 1
+            and parts[0] not in KERNEL_COMMANDS
+            and parts[0] in self._registry.loaded_names
+        ):
+            chain = self._pipeline.parse_chain(f"info {parts[0]}")
+
         return await self._pipeline.run(chain, ctx)
 
     # -- Kernel Command Handlers (PRD §5) --
@@ -433,7 +444,9 @@ class Kernel:
             input_stream: ChaityaStream,
             ctx: PipelineContext,
         ) -> tuple[bytes, int]:
-            return await self._invoke_adapter(name, handler, permissions, contract, input_stream, ctx)
+            return await self._invoke_adapter(
+                name, handler, permissions, contract, input_stream, ctx
+            )
 
         return _wrapped
 
@@ -447,7 +460,8 @@ class Kernel:
         return SdkSessionContext(
             session_id=ctx.session_id,
             session_state=session_state,
-            args=args or {
+            args=args
+            or {
                 "subcommand": ctx.env.get("__subcommand__", ""),
                 "__raw_args__": ctx.env.get("__args__", []),
                 **{k: v for k, v in ctx.env.items() if not k.startswith("__")},
@@ -466,11 +480,7 @@ class Kernel:
             if command.name != subcommand:
                 continue
             for param in command.params:
-                if (
-                    param.required
-                    and param.on_missing == "suspend"
-                    and not args.get(param.name)
-                ):
+                if param.required and param.on_missing == "suspend" and not args.get(param.name):
                     raise SdkSuspension(
                         SdkInputSpec(
                             name=param.name,
@@ -551,7 +561,7 @@ class Kernel:
                     "size_bytes": input_stream.size_bytes,
                     "encoding": input_stream.encoding,
                 },
-                created_at=datetime.now(timezone.utc).isoformat(),
+                created_at=datetime.now(UTC).isoformat(),
             )
             if ctx.session_id:
                 try:
@@ -576,7 +586,7 @@ class Kernel:
             )
             prompt = suspension.spec.prompt or f"Input required: {suspension.spec.name}"
             return (
-                f"[waiting:{request_id}] {prompt}\nRespond with: {self.cli_name} input respond {request_id} <value>".encode("utf-8"),
+                f"[waiting:{request_id}] {prompt}\nRespond with: {self.cli_name} input respond {request_id} <value>".encode(),
                 0,
             )
 
@@ -588,12 +598,74 @@ class Kernel:
             output = output.encode("utf-8")
         if not isinstance(output, bytes):
             output = str(output).encode("utf-8")
+
+        await self._evaluate_output_routing(
+            name,
+            output,
+            int(exit_code),
+            ctx.session_id,
+        )
+
         return output, int(exit_code)
+
+    async def _evaluate_output_routing(
+        self,
+        adapter_name: str,
+        output: bytes,
+        exit_code: int,
+        session_id: str | None,
+    ) -> None:
+        """Evaluate adapter output_routing rules and emit events (PRD §7).
+
+        Rules are simple conditions evaluated after L1 completes.
+        Supported patterns:
+            - "exit_code != 0"
+            - "exit_code == 0"
+            - "stdout contains 'text'"
+            - "stderr contains 'text'"
+        """
+        import re
+
+        pkg = self._registry.get_adapter(adapter_name)
+        if pkg is None or pkg.contract is None:
+            return
+
+        for rule in pkg.contract.output_routing:
+            condition = rule.condition.strip()
+            emit_type = rule.emit_event_type
+            if not condition or not emit_type:
+                continue
+
+            fired = False
+            try:
+                stdout_text = output.decode("utf-8", errors="replace")
+                if " contains " in condition:
+                    match = re.match(r"(stdout|stderr)\s+contains\s+'([^']*)'", condition)
+                    if match:
+                        source_text = stdout_text
+                        if match.group(1) == "stderr":
+                            source_text = ""
+                        fired = match.group(2) in source_text
+                elif condition.startswith("exit_code"):
+                    fired = eval(condition, {"exit_code": exit_code})
+            except Exception:
+                pass
+
+            if fired:
+                await self._event_bus.emit(
+                    Event(
+                        type=emit_type,
+                        source_adapter=adapter_name,
+                        session_id=session_id,
+                        exit_code=exit_code,
+                        payload={"output_length": len(output)},
+                    )
+                )
 
     async def _resume_pending_input(self, request_id: str, value: str) -> tuple[bytes, int]:
         pending = self._pending_inputs.pop(request_id, None)
         if pending is None:
-            return f"Unknown input request: {request_id}".encode("utf-8"), 1
+            return f"Unknown input request: {request_id}".encode(), 1
         await self._store.delete_pending_input(request_id)
 
         resumed_args = dict(pending.args)
@@ -676,13 +748,12 @@ class Kernel:
                 args=item["args"],
             )
 
-
     async def _handle_info(
         self, input_stream: ChaityaStream, ctx: PipelineContext
     ) -> tuple[bytes, int]:
         """Handle ``info [adapter] [subcommand]``.
 
-        - No args → kernel overview + adapter list
+        - No args → kernel overview + kernel commands + adapter list
         - ``info <adapter>`` → adapter contract details
         - ``info --kernel`` → kernel status
         """
@@ -690,17 +761,21 @@ class Kernel:
         adapter_name = args.get("__subcommand__", "")
 
         if adapter_name == "--kernel" or args.get("--kernel"):
+            sessions = await self._store.list_sessions()
+            active = [s for s in sessions if s.state.value != "dead"]
             info = {
                 "kernel_version": __version__,
                 "cli_name": self.cli_name,
                 "uptime_seconds": round(self.uptime_seconds, 1),
                 "adapters_loaded": len(self._registry.loaded_adapters),
-                "active_sessions": await self._store.list_sessions(),
+                "adapters_failed": 0,
+                "active_sessions": len(active),
+                "total_sessions": len(sessions),
                 "event_bus_backend": "sqlite",
                 "store_backend": "sqlite",
             }
-            lines = [f"{k}: {v}" for k, v in info.items()]
-            return "\n".join(lines).encode("utf-8"), 0
+            info_lines = [f"{k}: {v}" for k, v in info.items()]
+            return "\n".join(info_lines).encode("utf-8"), 0
 
         if adapter_name and adapter_name in self._registry.loaded_names:
             pkg = self._registry.get_adapter(adapter_name)
@@ -710,29 +785,101 @@ class Kernel:
                     f"Adapter: {c.name}",
                     f"Description: {c.description}",
                     f"Version: {c.contract_version}",
-                    f"Commands: {', '.join(cmd.name for cmd in c.commands)}",
+                    "Commands:",
                 ]
+                for cmd in c.commands:
+                    lines.append(f"  {cmd.name:16s} {cmd.description}")
+                    for p in cmd.params:
+                        req = "[required] " if p.required else ""
+                        lines.append(f"    --{p.name}: {req}{p.description}")
                 if c.depends_on:
                     lines.append(f"Dependencies: {', '.join(c.depends_on)}")
                 return "\n".join(lines).encode("utf-8"), 0
 
-        # Default: list all adapters
-        adapters = self._registry.loaded_adapters
-        if not adapters:
-            msg = (
-                f"No adapters installed.\n"
-                f"Install adapters with: pip install chaitya-adapter-<name>\n"
-                f"Then run: {self.cli_name} info"
-            )
-            return msg.encode("utf-8"), 0
+        # Default: comprehensive overview
+        sessions = await self._store.list_sessions()
+        active = [s for s in sessions if s.state.value not in ("dead",)]
+        lines: list[str] = []
 
-        lines = [f"Chaitya Core v{__version__}", ""]
-        lines.append("Installed adapters:")
-        for name, pkg in sorted(adapters.items()):
-            desc = pkg.contract.description if pkg.contract else ""
-            lines.append(f"  {name:20s} {desc}")
+        lines.append(f"Chaitya Core v{__version__}  (uptime: {round(self.uptime_seconds, 1)}s)")
+        lines.append("=" * 60)
         lines.append("")
-        lines.append(f"Run '{self.cli_name} info <adapter>' for details.")
+
+        lines.append("KERNEL COMMANDS")
+        lines.append("-" * 40)
+        lines.append(f"  {self.cli_name}                          Show this help")
+        lines.append(f"  {self.cli_name} info [adapter]          System or adapter details")
+        lines.append(f"  {self.cli_name} info --kernel           Kernel status")
+        lines.append("")
+        lines.append("  session list                           List all sessions")
+        lines.append("  session create <name> [--template]    Create a new session")
+        lines.append("  session status <name>                  Show session status")
+        lines.append("  session attach <name>                  Attach to a session (tmux)")
+        lines.append("  session detach <name>                  Detach from a session")
+        lines.append("  session output <name>                  Read session output")
+        lines.append("  session send-input <name> <text>       Send input to session")
+        lines.append("  session send-input <name> --newline    Send newline only")
+        lines.append("  session send-input <name> --key <key> Send key (enter/tab/space)")
+        lines.append("  session set-env <name> KEY=VALUE      Set environment variable")
+        lines.append("  session unset-env <name> KEY           Unset environment variable")
+        lines.append("  session signal <name> <signal>         Send signal (SIGTERM/SIGINT)")
+        lines.append("  session kill <name>                   Kill a session")
+        lines.append("")
+        lines.append("  watch --all                            Stream all events")
+        lines.append("  watch --session <name> [--on <type>]   Stream session events")
+        lines.append("  watch --search <query>                 Search event log")
+        lines.append("")
+        lines.append("  input list                            List pending input requests")
+        lines.append("  input respond <id> <value>            Respond to a suspended command")
+        lines.append("")
+        lines.append("  output --filter <pattern>             Filter output")
+        lines.append("  output --format json|text             Set output format")
+        lines.append("")
+        lines.append("  registry list                         List loaded adapters")
+        lines.append("  registry validate <name>             Validate an adapter contract")
+        lines.append("")
+        lines.append("  <adapter> <subcommand> [args]        Run adapter command")
+        lines.append("  <adapter>                             Show adapter info")
+        lines.append("")
+
+        lines.append("ACTIVE SESSIONS")
+        lines.append("-" * 40)
+        if active:
+            lines.append(f"  {'NAME':20s} {'STATE':10s} {'TEMPLATE'}")
+            for s in active:
+                tmpl = s.template or "-"
+                lines.append(f"  {s.name:20s} {s.state.value:10s} {tmpl}")
+        else:
+            lines.append("  No active sessions.")
+        lines.append("")
+        lines.append("  Use 'session create <name>' to create a new session.")
+        lines.append("  Use 'session attach <name>' to attach to a session (tmux).")
+        lines.append("  Use 'session list' to see all sessions.")
+
+        adapters = self._registry.loaded_adapters
+        lines.append("")
+        lines.append("INSTALLED ADAPTERS")
+        lines.append("-" * 40)
+        if adapters:
+            lines.append("  NAME                 DESCRIPTION                COMMANDS")
+            for name, pkg in sorted(adapters.items()):
+                desc = (
+                    (pkg.contract.description[:24] + "...")
+                    if pkg.contract and len(pkg.contract.description) > 24
+                    else (pkg.contract.description if pkg.contract else "")
+                )
+                cmds = (
+                    ", ".join(cmd.name for cmd in (pkg.contract.commands if pkg.contract else []))
+                    or "-"
+                )
+                lines.append(f"  {name:20s} {desc:25s} {cmds}")
+            lines.append("")
+            lines.append(f"  Run '{self.cli_name} info <adapter>' for adapter details.")
+            lines.append(f"  Run '{self.cli_name} <adapter>' without subcommand to see its info.")
+        else:
+            lines.append("  No adapters installed.")
+            lines.append("  Install adapters with: pip install chaitya-adapter-<name>")
+
         return "\n".join(lines).encode("utf-8"), 0
 
     async def _handle_session(
@@ -745,10 +892,12 @@ class Kernel:
         if sub == "list":
             records = await self._store.list_sessions()
             if not records:
-                return b"No active sessions.", 0
-            lines = [f"{'NAME':20s} {'STATE':10s}"]
+                return b"No sessions. Use 'session create <name>' to create one.", 0
+            lines = ["NAME                 STATE      TEMPLATE             LAST ACTIVITY"]
+            lines.append("-" * 80)
             for r in records:
-                lines.append(f"{r.name:20s} {r.state.value:10s}")
+                tmpl = r.template or "-"
+                lines.append(f"{r.name:20s} {r.state.value:10s} {tmpl:20s} {r.last_activity}")
             return "\n".join(lines).encode("utf-8"), 0
 
         if sub == "status":
@@ -757,7 +906,7 @@ class Kernel:
                 return b"Usage: session status <name>", 1
             rec = await self._store.get_session(name)
             if rec is None:
-                return f"Session '{name}' not found.".encode("utf-8"), 1
+                return f"Session '{name}' not found.".encode(), 1
             lines = [
                 f"Name: {rec.name}",
                 f"State: {rec.state.value}",
@@ -768,10 +917,15 @@ class Kernel:
         if sub == "create":
             name = ctx.env.get("name") or (positional[0] if positional else "")
             if not name:
-                return b"Usage: session create <name>", 1
+                return b"Usage: session create <name> [--template <template-name>]", 1
+            template = ctx.env.get("template")
             try:
-                await self._session_mgr.create(name=name)
-                return f"Session '{name}' created.".encode("utf-8"), 0
+                handle = await self._session_mgr.create(name=name, template=template)
+                msg = f"Session '{name}' created"
+                if template:
+                    msg += f" (template: {template})"
+                msg += "."
+                return msg.encode("utf-8"), 0
             except Exception as exc:
                 return str(exc).encode("utf-8"), 1
 
@@ -791,14 +945,14 @@ class Kernel:
                 }
                 data = key_map.get(key)
                 if data is None:
-                    return f"Unsupported key: {key}".encode("utf-8"), 1
+                    return f"Unsupported key: {key}".encode(), 1
             else:
                 data = raw_text.encode("utf-8")
                 if newline:
                     data += b"\n"
             try:
                 await self._session_mgr.send_input(name, data)
-                return f"Input sent to session '{name}'.".encode("utf-8"), 0
+                return f"Input sent to session '{name}'.".encode(), 0
             except Exception as exc:
                 return str(exc).encode("utf-8"), 1
 
@@ -816,14 +970,38 @@ class Kernel:
             except Exception as exc:
                 return str(exc).encode("utf-8"), 1
 
+        if sub == "attach":
+            name = ctx.env.get("name") or (positional[0] if positional else "")
+            if not name:
+                return b"Usage: session attach <name>", 1
+            try:
+                await self._session_mgr.attach(name)
+                return f"Attached to session '{name}'.".encode(), 0
+            except Exception as exc:
+                return str(exc).encode("utf-8"), 1
+
+        if sub == "detach":
+            name = ctx.env.get("name") or (positional[0] if positional else "")
+            if not name:
+                return b"Usage: session detach <name>", 1
+            try:
+                await self._session_mgr.detach(name)
+                return f"Detached from session '{name}'.".encode(), 0
+            except Exception as exc:
+                return str(exc).encode("utf-8"), 1
+
         if sub == "signal":
             name = ctx.env.get("name") or (positional[0] if positional else "")
-            sig = ctx.env.get("sig") or ctx.env.get("signal") or (positional[1] if len(positional) > 1 else "")
+            sig = (
+                ctx.env.get("sig")
+                or ctx.env.get("signal")
+                or (positional[1] if len(positional) > 1 else "")
+            )
             if not name or not sig:
                 return b"Usage: session signal <name> <signal>", 1
             try:
                 await self._session_mgr.signal(name, str(sig))
-                return f"Signal {sig} sent to session '{name}'.".encode("utf-8"), 0
+                return f"Signal {sig} sent to session '{name}'.".encode(), 0
             except Exception as exc:
                 return str(exc).encode("utf-8"), 1
 
@@ -835,7 +1013,7 @@ class Kernel:
             key, value = pair.split("=", 1)
             try:
                 await self._session_mgr.set_env(name, key, value)
-                return f"Environment set for session '{name}': {key}".encode("utf-8"), 0
+                return f"Environment set for session '{name}': {key}".encode(), 0
             except Exception as exc:
                 return str(exc).encode("utf-8"), 1
 
@@ -846,7 +1024,7 @@ class Kernel:
                 return b"Usage: session unset-env <name> KEY", 1
             try:
                 await self._session_mgr.unset_env(name, key)
-                return f"Environment removed for session '{name}': {key}".encode("utf-8"), 0
+                return f"Environment removed for session '{name}': {key}".encode(), 0
             except Exception as exc:
                 return str(exc).encode("utf-8"), 1
 
@@ -856,11 +1034,11 @@ class Kernel:
                 return b"Usage: session kill <name>", 1
             try:
                 await self._session_mgr.kill(name)
-                return f"Session '{name}' killed.".encode("utf-8"), 0
+                return f"Session '{name}' killed.".encode(), 0
             except Exception as exc:
                 return str(exc).encode("utf-8"), 1
 
-        return f"Unknown session subcommand: {sub}".encode("utf-8"), 1
+        return f"Unknown session subcommand: {sub}".encode(), 1
 
     async def _handle_input(
         self, input_stream: ChaityaStream, ctx: PipelineContext
@@ -886,36 +1064,132 @@ class Kernel:
                 return b"Usage: input respond <request_id> <value>", 1
             return await self._resume_pending_input(request_id, value)
 
-        return f"Unknown input subcommand: {sub}".encode("utf-8"), 1
+        return f"Unknown input subcommand: {sub}".encode(), 1
 
     async def _handle_output(
         self, input_stream: ChaityaStream, ctx: PipelineContext
     ) -> tuple[bytes, int]:
-        """Handle ``output <options>`` — configure output formatting."""
-        return b"output: not yet implemented", 0
+        """Handle ``output <options>`` — configure output formatting.
+
+        PRD §5:
+            output --filter <pattern>    Filter output lines matching pattern
+            output --format json|text     Set output format (json or text)
+
+        The output command is a pipeline modifier. When used standalone,
+        it shows the current output configuration.
+        """
+        output_format = str(ctx.env.get("format", "text")).lower()
+        filter_pattern = ctx.env.get("filter")
+        if not output_format and not filter_pattern:
+            return (
+                b"output configuration:\n"
+                b"  --format json|text    Set output format\n"
+                b"  --filter <pattern>    Filter output lines\n"
+                b"Current format: text (JSON-lines also supported)\n"
+                b"Use as pipeline modifier: pipe to filter output",
+                0,
+            )
+
+        if filter_pattern:
+            lines = (input_stream.content or b"").decode("utf-8", errors="replace").splitlines()
+            import re
+
+            try:
+                pattern = re.compile(str(filter_pattern))
+                filtered = [l for l in lines if pattern.search(l)]
+                result = "\n".join(filtered)
+            except re.error:
+                result = f"Invalid regex pattern: {filter_pattern}"
+            return result.encode("utf-8"), 0
+
+        if output_format == "json":
+            import json
+
+            return json.dumps(
+                {
+                    "content": (input_stream.content or b"").decode("utf-8", errors="replace"),
+                    "type": input_stream.declared_type,
+                    "size_bytes": input_stream.size_bytes,
+                },
+                separators=(",", ":"),
+            ).encode("utf-8"), 0
+
+        return input_stream.content or b"", 0
 
     async def _handle_watch(
         self, input_stream: ChaityaStream, ctx: PipelineContext
     ) -> tuple[bytes, int]:
-        """Handle ``watch <options>`` — subscribe to events."""
-        event_types = None
+        """Handle ``watch <options>`` — subscribe to events.
+
+        PRD §5:
+            watch --session <name> [--on <event-type>] [--exit-after N]
+            watch --all [--on <event-type>]
+            watch --search <query> [--since <duration>]
+
+        Streams JSON-lines on stdout. Pipeable to any adapter.
+        """
+        import json
+        from datetime import datetime, timedelta
+
+        search_query = ctx.env.get("search")
+        session_id = ctx.env.get("session")
+        exit_after = int(str(ctx.env.get("exit-after", "0")))
+        limit = int(str(ctx.env.get("limit", "100")))
+        since_str = ctx.env.get("since")
+        event_types: list[str] | None = None
         if ctx.env.get("on"):
             event_types = [str(ctx.env["on"])]
-        session_id = ctx.env.get("session")
-        limit = int(str(ctx.env.get("limit", "20")))
-        events = await self._event_bus.history(
-            EventFilter(
-                event_types=event_types,
-                session_id=str(session_id) if session_id else None,
-                limit=limit,
+
+        if search_query:
+            since_dt = None
+            if since_str:
+                try:
+                    secs = int(since_str.rstrip("s"))
+                    since_dt = datetime.now(UTC) - timedelta(seconds=secs)
+                except ValueError:
+                    pass
+            ef = EventFilter(since=since_dt, limit=limit)
+            events = await self._store.search_events(str(search_query), ef)
+            if event_types:
+                events = [e for e in events if e.type in event_types]
+        else:
+            since_dt = None
+            if since_str:
+                try:
+                    secs = int(since_str.rstrip("s"))
+                    since_dt = datetime.now(UTC) - timedelta(seconds=secs)
+                except ValueError:
+                    pass
+            events = await self._event_bus.history(
+                EventFilter(
+                    event_types=event_types,
+                    session_id=str(session_id) if session_id else None,
+                    since=since_dt,
+                    limit=limit,
+                )
             )
-        )
+
+        if exit_after > 0:
+            events = events[:exit_after]
+
         if not events:
-            return b"No events recorded.", 0
-        lines = []
+            return b"No events match the query.", 0
+
+        lines: list[str] = []
         for ev in events:
-            scope = f" session={ev.session_id}" if ev.session_id else ""
-            lines.append(f"[{ev.timestamp}] {ev.type}{scope}: {ev.payload}")
+            event_dict = {
+                "event_id": ev.event_id,
+                "type": ev.type,
+                "source_adapter": ev.source_adapter,
+                "timestamp": ev.timestamp,
+                "session_id": ev.session_id,
+                "exit_code": ev.exit_code,
+                "duration_ms": ev.duration_ms,
+                "payload": ev.payload,
+                "parent_event_id": ev.parent_event_id,
+                "request_id": ev.request_id,
+            }
+            lines.append(json.dumps(event_dict, separators=(",", ":")))
         return "\n".join(lines).encode("utf-8"), 0
 
     async def _handle_registry(
@@ -931,16 +1205,14 @@ class Kernel:
                 return b"No adapters loaded.", 0
             lines = [f"{'NAME':20s} {'STATUS':12s}"]
             for name, pkg in sorted(adapters.items()):
-                lines.append(
-                    f"{name:20s} {pkg.status.value:12s}"
-                )
+                lines.append(f"{name:20s} {pkg.status.value:12s}")
             return "\n".join(lines).encode("utf-8"), 0
 
         if sub == "validate":
             name = ctx.env.get("name") or (positional[0] if positional else "")
             pkg = self._registry.get_adapter(name)
             if pkg is None:
-                return f"Adapter '{name}' not found.".encode("utf-8"), 1
+                return f"Adapter '{name}' not found.".encode(), 1
             result = self._registry.validate(pkg)
             lines = [f"Valid: {result.valid}"]
             for e in result.errors:
@@ -949,4 +1221,4 @@ class Kernel:
                 lines.append(f"  WARNING: {w}")
             return "\n".join(lines).encode("utf-8"), 0
 
-        return f"Unknown registry subcommand: {sub}".encode("utf-8"), 1
+        return f"Unknown registry subcommand: {sub}".encode(), 1

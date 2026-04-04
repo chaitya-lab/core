@@ -25,7 +25,7 @@ async def shell_handler(
 ) -> tuple[bytes, int]:
     subcommand = str(ctx.args.get("subcommand", ""))
     if subcommand != "run":
-        return f"Unknown shell subcommand: {subcommand}".encode("utf-8"), 1
+        return f"Unknown shell subcommand: {subcommand}".encode(), 1
 
     command = ctx.args.get("command")
     if not command:

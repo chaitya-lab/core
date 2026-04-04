@@ -20,8 +20,8 @@ loader reads this metadata when discovering entry points.
 from __future__ import annotations
 
 import functools
-from dataclasses import asdict
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from chaitya_sdk.types import (
     AdapterContract,

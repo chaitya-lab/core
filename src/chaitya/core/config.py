@@ -164,7 +164,7 @@ def _load_yaml_file(path: Path) -> dict[str, Any]:
         return {}
 
     try:
-        with open(path, "r", encoding="utf-8") as fh:
+        with open(path, encoding="utf-8") as fh:
             data = yaml.safe_load(fh) or {}
         if not isinstance(data, dict):
             logger.warning("Config file %s does not contain a mapping — ignoring", path)

@@ -181,7 +181,7 @@ class TestStripAnsi:
 class TestL2Presentation:
     def test_plain_text_passthrough(self) -> None:
         result = apply_l2(b"hello", b"", exit_code=0)
-        assert result.processed == "hello"
+        assert result.processed == "hello\n[exit:0 | 0ms]"
         assert result.exit_code == 0
 
     def test_binary_guard(self) -> None:
@@ -191,22 +191,24 @@ class TestL2Presentation:
 
     def test_ansi_stripped(self) -> None:
         result = apply_l2(b"\x1b[31mred\x1b[0m text", b"", exit_code=0)
-        assert result.processed == "red text"
+        assert result.processed == "red text\n[exit:0 | 0ms]"
 
     def test_stderr_attached_on_error(self) -> None:
         result = apply_l2(b"out", b"err msg", exit_code=1)
         assert "[stderr] err msg" in result.processed
+        assert "[exit:1 |" in result.processed
 
     def test_stderr_not_attached_on_success(self) -> None:
         result = apply_l2(b"out", b"err msg", exit_code=0)
         assert "[stderr]" not in result.processed
+        assert "[exit:0 |" in result.processed
 
     def test_overflow_truncation(self) -> None:
-        # Generate >200 lines
         many_lines = b"\n".join(f"line {i}".encode() for i in range(300))
         result = apply_l2(many_lines, b"", exit_code=0)
         assert "[truncated" in result.processed
         assert "300 lines total" in result.processed
+        assert "[exit:0 |" in result.processed
 
     def test_session_id_in_output(self) -> None:
         result = apply_l2(b"data", b"", exit_code=0, session_id="s1")
@@ -215,11 +217,16 @@ class TestL2Presentation:
     def test_duration_recorded(self) -> None:
         result = apply_l2(b"data", b"", exit_code=0, duration_ms=42)
         assert result.duration_ms == 42
+        assert "[exit:0 | 42ms]" in result.processed
 
     def test_empty_output(self) -> None:
         result = apply_l2(b"", b"", exit_code=0)
-        assert result.processed == ""
+        assert result.processed == "\n[exit:0 | 0ms]"
         assert result.exit_code == 0
+
+    def test_metadata_footer_format(self) -> None:
+        result = apply_l2(b"data", b"", exit_code=5, duration_ms=123)
+        assert result.processed.endswith("[exit:5 | 123ms]")
 
 
 # ---------------------------------------------------------------------------
@@ -227,32 +234,24 @@ class TestL2Presentation:
 # ---------------------------------------------------------------------------
 
 
-async def _echo_handler(
-    input_stream: ChaityaStream, ctx: PipelineContext
-) -> tuple[bytes, int]:
+async def _echo_handler(input_stream: ChaityaStream, ctx: PipelineContext) -> tuple[bytes, int]:
     """Test handler that echoes 'echo' or the input content."""
     if input_stream.content:
         return input_stream.content, 0
     return b"echo-output", 0
 
 
-async def _fail_handler(
-    input_stream: ChaityaStream, ctx: PipelineContext
-) -> tuple[bytes, int]:
+async def _fail_handler(input_stream: ChaityaStream, ctx: PipelineContext) -> tuple[bytes, int]:
     """Test handler that always fails."""
     return b"fail-output", 1
 
 
-async def _upper_handler(
-    input_stream: ChaityaStream, ctx: PipelineContext
-) -> tuple[bytes, int]:
+async def _upper_handler(input_stream: ChaityaStream, ctx: PipelineContext) -> tuple[bytes, int]:
     """Test handler that uppercases input."""
     return input_stream.content.upper(), 0
 
 
-async def _error_handler(
-    input_stream: ChaityaStream, ctx: PipelineContext
-) -> tuple[bytes, int]:
+async def _error_handler(input_stream: ChaityaStream, ctx: PipelineContext) -> tuple[bytes, int]:
     """Test handler that raises an exception."""
     raise RuntimeError("boom")
 
@@ -352,4 +351,3 @@ class TestPipelineExecution:
         assert "test" in orch._handlers
         orch.unregister_handler("test")
         assert "test" not in orch._handlers
-

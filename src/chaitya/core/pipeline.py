@@ -8,13 +8,11 @@ Reference: PRD §3.5, §4, §13
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import re
 import time
-from collections.abc import AsyncIterator, Callable, Awaitable
-from dataclasses import dataclass, field
+from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any
 
 from chaitya.core.types import (
@@ -62,7 +60,7 @@ def decode_frame(data: bytes) -> tuple[StreamHeader, bytes]:
     if newline_pos == -1:
         raise ValueError("Malformed frame: no header/payload separator")
     header_raw = data[:newline_pos]
-    payload = data[newline_pos + 1:]
+    payload = data[newline_pos + 1 :]
     try:
         header_dict = json.loads(header_raw)
     except json.JSONDecodeError as exc:
@@ -264,6 +262,7 @@ def apply_l2(
     2. ANSI strip: remove all escape codes
     3. Overflow: >200 lines or >50KB → truncate, write full to file
     4. Stderr attachment: non-zero exit + stderr → append [stderr]
+    5. Metadata footer: [exit:{code} | {duration}ms] as last line (PRD §4)
     """
     # Binary guard
     if _NULL_BYTE in raw_output:
@@ -294,6 +293,7 @@ def apply_l2(
 
     if is_overflow and overflow_dir:
         import os
+
         os.makedirs(overflow_dir, exist_ok=True)
         ts = int(time.time() * 1000)
         overflow_path = os.path.join(
@@ -314,10 +314,11 @@ def apply_l2(
 
     # Stderr attachment
     if exit_code != 0 and stderr_output:
-        stderr_text = strip_ansi(
-            stderr_output.decode("utf-8", errors="replace")
-        )
+        stderr_text = strip_ansi(stderr_output.decode("utf-8", errors="replace"))
         processed += f"\n[stderr] {stderr_text}"
+
+    # Metadata footer (PRD §4: always last line)
+    processed += f"\n[exit:{exit_code} | {duration_ms}ms]"
 
     return CommandOutput(
         raw=raw_output.decode("utf-8", errors="replace"),
@@ -392,7 +393,7 @@ class PipelineOrchestrator:
                     f"No handler registered for adapter {cmd.adapter!r}. "
                     f"Available adapters: {', '.join(sorted(self._handlers)) or '(none)'}. "
                     f"Use 'info' to discover adapters."
-                ).encode("utf-8")
+                ).encode()
                 accumulated_stderr.extend(err_msg)
                 last_exit_code = 127
                 if operator in (PipelineOperator.AND, PipelineOperator.PIPE):
@@ -483,7 +484,7 @@ class PipelineOrchestrator:
                     f"No handler registered for adapter {cmd.adapter!r}. "
                     f"Available adapters: {', '.join(sorted(self._handlers)) or '(none)'}. "
                     f"Use 'info' to discover adapters."
-                ).encode("utf-8")
+                ).encode()
                 accumulated_stderr.extend(err_msg)
                 last_exit_code = 127
                 yield OutputChunk(data=err_msg, is_stderr=True)
