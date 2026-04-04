@@ -76,11 +76,9 @@ def _make_mock_registry_adapter() -> AdapterPackage:
 @pytest.fixture
 async def kernel():
     """Create, boot, and yield a kernel; shut down after test."""
-    mock_reg = _make_mock_registry_adapter()
     k = Kernel(
         db_path=":memory:",
         system_adapters=frozenset(),
-        registry_adapter_pkg=mock_reg,
     )
     await k.boot()
     yield k
@@ -90,11 +88,9 @@ async def kernel():
 @pytest.fixture
 async def raw_kernel():
     """Unbooted kernel for boot-sequence tests."""
-    mock_reg = _make_mock_registry_adapter()
     return Kernel(
         db_path=":memory:",
         system_adapters=frozenset(),
-        registry_adapter_pkg=mock_reg,
     )
 
 
@@ -315,7 +311,7 @@ class TestDispatch:
                 adapter_name="test-adapter",
                 handler=None,
                 contract=None,
-                permissions=None,
+                permissions=AdapterPermissions(),
                 input_stream=ChaityaStream(),
                 ctx=PipelineContext(),
                 spec=SdkInputSpec(name="test-field", prompt="test"),

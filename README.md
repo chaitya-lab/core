@@ -18,7 +18,9 @@ The kernel has exactly seven responsibilities:
 6. **Adapter Registry** — discovers, validates, loads Python adapter packages
 7. **Persistent Store** — session records + event log in one SQLite database
 
-The kernel routes. Adapters act. The kernel has **zero built-in commands** — a freshly started kernel with no adapters is functional but capability-free.
+The kernel routes. Adapters act. The kernel has **six built-in commands**: `info`, `session`, `input`, `output`, `watch`, and `registry`. All other commands come from adapters.
+
+`registry` is built into the kernel (no pip install needed): `registry list`, `registry info`, `registry validate` work out of the box.
 
 ## Core Tenets
 
@@ -110,7 +112,7 @@ All swappable via `core.yaml`:
 
 | Protocol | Default | Purpose |
 |---|---|---|
-| `SessionBackend` | tmux on macOS/Linux, local fallback elsewhere | Named session management |
+| `SessionBackend` | tmux (macOS/Linux), psmux (Windows), local fallback | Named session management |
 | `EventBus` | SQLite | Pub/sub event routing |
 | `Store` | SQLite | Session records + event log |
 | `PipelineOrchestrator` | Built-in | L0→L1→L2 data flow |

@@ -24,6 +24,6 @@ This gives contributors a predictable place to add packages without polluting th
 
 - Expand first-party adaptors beyond `file` and `shell` once their contracts settle.
 - Decide whether `route` and `process` stay first-party workspace adaptors or remain future external packages.
-- Expand tmux integration coverage to restart, stuck detection, and signal handling.
+- Expand tmux/psmux integration coverage to restart, stuck detection, and signal handling.
 - Persist pending suspension requests across kernel restarts if long-lived workflows need it.
-- Add CI on macOS and Linux.
+- Add CI on macOS, Linux, and Windows.

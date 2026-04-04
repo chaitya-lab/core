@@ -18,10 +18,10 @@ Everything else should prefer to live in adaptors.
 
 ## Main Runtime Pieces
 
-- `Kernel`: top-level orchestrator
+- `Kernel`: top-level orchestrator (handles 6 built-in commands: info, session, input, output, watch, registry)
 - `SessionManager`: session lifecycle and state
-- `SessionBackend`: concrete substrate, `tmux` on macOS/Linux and local fallback
-- `SqliteEventBus`: event persistence and pub/sub
+- `SessionBackend`: concrete substrate — tmux on macOS/Linux, psmux on Windows, local-process fallback
+- `SqliteEventBus`: event persistence and pub/sub (stream events like stdout_chunk NOT persisted to DB)
 - `SqliteStore`: session records, events, and pending suspension requests
 - `PipelineOrchestrator`: command parsing and execution flow
 - `AdapterRegistry`: discovery from entry points and configured filesystem paths

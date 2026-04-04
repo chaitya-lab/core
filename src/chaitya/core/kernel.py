@@ -50,12 +50,11 @@ from chaitya_sdk.types import (
 
 from chaitya.core import __version__
 from chaitya.core.backends.local import LocalProcessBackend
-from chaitya.core.backends.psmux import PsmuxBackend
 from chaitya.core.backends.tmux import TmuxSessionBackend
 from chaitya.core.config import CoreConfig
 from chaitya.core.event_bus import SqliteEventBus
 from chaitya.core.pipeline import AdapterHandler, PipelineOrchestrator
-from chaitya.core.registry import AdapterRegistry, BootstrapLoader, REGISTRY_ADAPTER_NAME
+from chaitya.core.registry import AdapterRegistry
 from chaitya.core.session_manager import SessionManager
 from chaitya.core.store import SqliteStore
 from chaitya.core.types import (
@@ -83,7 +82,7 @@ logger = logging.getLogger(__name__)
 KERNEL_COMMANDS = frozenset({"info", "session", "input", "output", "watch", "registry"})
 
 # System adapters whose load failure halts boot (PRD §3.6)
-DEFAULT_SYSTEM_ADAPTERS = frozenset({"file", "shell"})
+DEFAULT_SYSTEM_ADAPTERS = frozenset({"file", "shell", "registry"})
 
 
 class _AdapterEventBusBridge:
@@ -163,7 +162,6 @@ class Kernel:
         max_events_per_second: int = 1000,
         max_log_size_bytes: int = 1_073_741_824,
         templates_dir: str | None = None,
-        registry_adapter_pkg: Any = None,
         input_timeout_seconds: int = 300,
     ) -> None:
         self._config = config
@@ -175,8 +173,6 @@ class Kernel:
         self._pending_inputs: dict[str, _PendingInputRequest] = {}
         self._input_timeout_seconds: int = input_timeout_seconds
         self._input_timeout_task: asyncio.Task[None] | None = None
-        self._bootstrap_loader = BootstrapLoader()
-        self._registry_adapter_pkg: Any = registry_adapter_pkg
 
         # --- Subsystem composition ---
         self._store = SqliteStore(
@@ -225,6 +221,8 @@ class Kernel:
         if backend == "tmux":
             return TmuxSessionBackend()
         if backend == "psmux":
+            from chaitya.core.backends.psmux import PsmuxBackend  # type: ignore[import]
+
             return PsmuxBackend()
         raise ValueError(
             f"Unsupported session backend {session_backend!r}. Supported backends: local, tmux, psmux."
@@ -287,22 +285,9 @@ class Kernel:
             await self._event_bus.open()
             logger.info("Step 3/10: Event bus opened")
 
-            # Step 4: Bootstrap loader finds and loads registry adapter (PRD §3.6)
-            # If registry adapter is missing: kernel halts with installation instructions
-            if self._registry_adapter_pkg is None:
-                try:
-                    self._registry_adapter_pkg = self._bootstrap_loader.load_registry_adapter()
-                except AdapterLoadError as exc:
-                    raise KernelBootError(
-                        f"Registry adapter not found. Install with:\n"
-                        f"  pip install chaitya-adapter-registry\n"
-                        f"Details: {exc}"
-                    ) from exc
-            logger.info("Step 4/10: Registry adapter loaded")
-
-            # Step 5: Registry: discover all installed adapters
+            # Step 4: Registry: discover all installed adapters
             packages = await self._registry.discover()
-            logger.info("Step 5/10: Discovered %d adapter package(s)", len(packages))
+            logger.info("Step 4/10: Discovered %d adapter package(s)", len(packages))
 
             # Step 6: Dependency graph: topological sort
             graph = self._registry.build_dependency_graph(packages)
@@ -312,8 +297,7 @@ class Kernel:
                 len(graph.rejected),
             )
 
-            # Step 7: Load system adapters in order
-            # Step 8: Load user adapters in order
+            # Step 5: Load adapters (system + user) in dependency order
             loaded, failed = await self._registry.load_all(
                 packages, system_adapters=self._system_adapters
             )
@@ -322,23 +306,26 @@ class Kernel:
             for name in failed:
                 await self._event_bus.emit(Event(type=ADAPTER_REJECTED, payload={"adapter": name}))
             logger.info(
-                "Steps 7-8/10: Loaded %d adapter(s), %d failed",
+                "Step 5/10: Loaded %d adapter(s), %d failed",
                 len(loaded),
                 len(failed),
             )
 
-            # Step 9: Restore session state from store
+            # Step 6: Restore session state from store
             await self._session_mgr.start()
-            logger.info("Step 9/10: Session state restored")
+            logger.info("Step 6/10: Session state restored")
 
-            # Step 10: Register kernel command handlers in pipeline
+            # Step 7: Register kernel command handlers in pipeline
             self._register_kernel_handlers()
             self._register_loaded_adapter_handlers()
             await self._restore_pending_inputs()
-            logger.info("Step 10/10: Kernel command handlers registered")
+            logger.info("Step 7/10: Kernel command handlers registered")
 
-            # Step 11: Emit kernel_started, accept commands
+            # Step 8: Wire registry into SDK context
             registry_proxy.set_registry(self._registry)
+            logger.info("Step 8/10: SDK registry context wired")
+
+            # Step 9: Emit kernel_started, accept commands
             self._boot_time = time.monotonic()
             self._booted = True
             self._input_timeout_task = asyncio.create_task(self._input_timeout_loop())
@@ -354,7 +341,7 @@ class Kernel:
                     },
                 )
             )
-            logger.info("Step 11/11: Kernel started — accepting commands")
+            logger.info("Step 9/9: Kernel started — accepting commands")
 
         except AdapterLoadError as exc:
             raise KernelBootError(f"System adapter failed to load: {exc}") from exc
@@ -1315,7 +1302,7 @@ class Kernel:
     async def _handle_registry(
         self, input_stream: ChaityaStream, ctx: PipelineContext
     ) -> tuple[bytes, int]:
-        """Handle ``registry <subcommand>``."""
+        """Handle ``registry list``, ``registry info``, ``registry validate``."""
         sub = ctx.env.get("__subcommand__", "list")
         positional = ctx.env.get("__args__", [])
 
@@ -1323,10 +1310,40 @@ class Kernel:
             adapters = self._registry.loaded_adapters
             if not adapters:
                 return b"No adapters loaded.", 0
-            lines = [f"{'NAME':20s} {'STATUS':12s}"]
+            lines = [f"{'NAME':20s} {'STATUS':12s} DESCRIPTION"]
+            lines.append("-" * 70)
             for name, pkg in sorted(adapters.items()):
-                lines.append(f"{name:20s} {pkg.status.value:12s}")
+                desc = pkg.contract.description[:30] if pkg.contract else ""
+                lines.append(f"{name:20s} {pkg.status.value:12s} {desc}")
+            lines.append(f"\n{len(adapters)} adapter(s) loaded.")
             return "\n".join(lines).encode("utf-8"), 0
+
+        if sub == "info":
+            name = ctx.env.get("name") or (positional[0] if positional else "")
+            if not name:
+                return b"Usage: registry info <adapter-name>", 1
+            pkg = self._registry.get_adapter(name)
+            if pkg is None:
+                return f"Adapter '{name}' not found.".encode(), 1
+            if pkg.contract:
+                c = pkg.contract
+                lines = [
+                    f"Adapter: {c.name}",
+                    f"Description: {c.description}",
+                    f"Contract version: {c.contract_version}",
+                    f"Status: {pkg.status.value}",
+                    f"Entry point: {pkg.entry_point}",
+                ]
+                if c.commands:
+                    lines.append("Commands:")
+                    for cmd in c.commands:
+                        lines.append(f"  {cmd.name:16s} {cmd.description}")
+                if c.depends_on:
+                    lines.append(f"Dependencies: {', '.join(c.depends_on)}")
+                if pkg.error:
+                    lines.append(f"Load error: {pkg.error}")
+                return "\n".join(lines).encode("utf-8"), 0
+            return f"Adapter '{name}' has no contract.".encode(), 1
 
         if sub == "validate":
             name = ctx.env.get("name") or (positional[0] if positional else "")
@@ -1334,11 +1351,16 @@ class Kernel:
             if pkg is None:
                 return f"Adapter '{name}' not found.".encode(), 1
             result = self._registry.validate(pkg)
-            lines = [f"Valid: {result.valid}"]
+            if result.valid:
+                return f"Adapter '{name}': VALID".encode(), 0
+            lines = [f"Adapter '{name}': INVALID"]
             for e in result.errors:
                 lines.append(f"  ERROR: {e}")
             for w in result.warnings:
                 lines.append(f"  WARNING: {w}")
-            return "\n".join(lines).encode("utf-8"), 0
+            return "\n".join(lines).encode("utf-8"), 1
 
-        return f"Unknown registry subcommand: {sub}".encode(), 1
+        return (
+            f"Unknown registry subcommand: {sub}\nUsage: registry <list|info|validate>".encode(),
+            1,
+        )
