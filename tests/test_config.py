@@ -118,7 +118,8 @@ class TestEnvOverrides:
         assert result["templates_dir"] == "/custom/templates"
 
     def test_adapter_paths_override(self, monkeypatch):
-        monkeypatch.setenv("CHAITYA_ADAPTER_PATHS", "/a:/b")
+        # Use os.pathsep for platform independence in the test input
+        monkeypatch.setenv("CHAITYA_ADAPTER_PATHS", f"/a{os.pathsep}/b")
         config = {"adapter_search_paths": []}
         result = _apply_env_overrides(config)
         assert result["adapter_search_paths"] == ["/a", "/b"]

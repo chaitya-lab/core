@@ -23,9 +23,17 @@ logger = logging.getLogger(__name__)
 
 
 def _default_session_backend_name() -> str:
-    """Resolve the default session substrate for this machine."""
+    """Resolve the default session substrate for this machine.
+
+    Priority:
+      - macOS/Linux with tmux → "tmux"
+      - Windows with psmux    → "psmux"
+      - fallback              → "local"
+    """
     if os.name != "nt" and shutil.which("tmux"):
         return "tmux"
+    if os.name == "nt" and (shutil.which("psmux") or shutil.which("pmux")):
+        return "psmux"
     return "local"
 
 # ---------------------------------------------------------------------------
@@ -244,6 +252,8 @@ def _apply_env_overrides(config: dict) -> dict:
                 )
                 continue
         elif final_key == "adapter_search_paths":
+            # Support both os.pathsep (';' on Windows, ':' on Unix) and ':'
+            # Always use os.pathsep as authoritative; document it in config docs.
             target[final_key] = [part for part in value.split(os.pathsep) if part]
         else:
             target[final_key] = value

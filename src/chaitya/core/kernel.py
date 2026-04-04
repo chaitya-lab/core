@@ -50,6 +50,7 @@ from chaitya_sdk.types import (
 
 from chaitya.core import __version__
 from chaitya.core.backends.local import LocalProcessBackend
+from chaitya.core.backends.psmux import PsmuxBackend
 from chaitya.core.backends.tmux import TmuxSessionBackend
 from chaitya.core.config import CoreConfig
 from chaitya.core.event_bus import SqliteEventBus
@@ -223,8 +224,10 @@ class Kernel:
             return LocalProcessBackend()
         if backend == "tmux":
             return TmuxSessionBackend()
+        if backend == "psmux":
+            return PsmuxBackend()
         raise ValueError(
-            f"Unsupported session backend {session_backend!r}. Supported backends: local, tmux."
+            f"Unsupported session backend {session_backend!r}. Supported backends: local, tmux, psmux."
         )
 
     # -- Public properties --
