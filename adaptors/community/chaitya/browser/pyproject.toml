@@ -1,0 +1,22 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "chaitya-adapter-browser"
+version = "0.1.0a1"
+description = "Browser automation adapter for Chaitya Core via Playwright"
+requires-python = ">=3.10"
+dependencies = ["playwright>=1.40.0"]
+
+[project.optional-dependencies]
+dev = ["chaitya-adapter-browser[test]"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/chaitya_adapter_browser"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src/"]
+
+[tool.chaitya]
+name = "browser"
