@@ -75,6 +75,7 @@ from chaitya_sdk.wrappers import (  # noqa: F401
     ActivityState,
     CLIWrapper,
     CommandResult,
+    PassthroughCLI,
     detect_activity_from_output,
     format_exit_code_note,
     run_cli,
@@ -134,6 +135,7 @@ __all__ = [
     # CLI wrappers
     "CLIWrapper",
     "CommandResult",
+    "PassthroughCLI",
     "ActivityState",
     "detect_activity_from_output",
     "format_exit_code_note",

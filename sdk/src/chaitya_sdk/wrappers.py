@@ -40,9 +40,10 @@ from __future__ import annotations
 import asyncio
 import shlex
 from dataclasses import asdict, dataclass, field
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
 if TYPE_CHECKING:
+    from chaitya_sdk.session import SessionRunner
     from chaitya_sdk.types import SessionContext
 
 
@@ -409,3 +410,149 @@ def format_exit_code_note(command: str, exit_code: int) -> str | None:
         return cmd_semantics[exit_code]
 
     return None
+
+
+# ---------------------------------------------------------------------------
+# PassthroughCLI — wildcard command wrapper for generic CLI tools
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class PassthroughCLI:
+    """Thin wrapper for CLI tools that just pass through arguments.
+
+    Use this for wrapping large CLIs (git, kubectl, gimp) where you don't want
+    to define every subcommand. The adapter declares ``"*"`` as its only command,
+    and this class handles the passthrough logic.
+
+    Usage::
+
+        from chaitya_sdk.wrappers import PassthroughCLI
+        from chaitya_sdk import adapter, ChaityaStream, SessionContext
+
+        git = PassthroughCLI(
+            name="git",
+            blocked=["push", "reset --hard", "clean -fd"],
+            overrides={
+                "clone": _handle_clone,   # custom handler for specific subcommand
+            },
+        )
+
+        @adapter(**git.build_contract())
+        async def git_handler(stream: ChaityaStream, ctx: SessionContext):
+            return await git.passthrough(ctx)
+
+    The ``blocked`` list blocks specific subcommands (exact match or prefix).
+    The ``overrides`` dict lets you add custom logic for specific subcommands
+    before falling through to passthrough.
+
+    Architecture (PRD §3.3):
+        - The kernel handles tmux via SessionRunner
+        - This class only builds the command string and calls SessionRunner
+        - No tmux calls in the adapter
+    """
+
+    name: str = ""
+    description: str = ""
+    blocked: list[str] = field(default_factory=list)
+    overrides: dict[str, Callable[..., Awaitable[tuple[bytes, int]]]] = field(default_factory=dict)
+    pass_env: list[str] = field(default_factory=list)
+    default_session: str = "default"
+    completion_patterns: list[Any] = field(default_factory=list)
+    timeout: float = 300.0
+
+    def is_blocked(self, subcommand: str, raw_args: list[str]) -> bool:
+        """Return True if the subcommand/args combination is blocked."""
+        full = f"{subcommand} {' '.join(raw_args)}"
+        for blocked in self.blocked:
+            if blocked == subcommand or full.startswith(blocked):
+                return True
+        return False
+
+    def build_contract(self) -> dict[str, Any]:
+        """Return the adapter contract dict with ``"*"`` as the wildcard command."""
+        override_commands = [
+            {
+                "name": sub,
+                "description": f"Override handler for {self.name} {sub}",
+                "examples": [f"chaitya {self.name} {sub} --help"],
+            }
+            for sub in sorted(self.overrides.keys())
+        ]
+        wildcard = [
+            {
+                "name": "*",
+                "description": "Wildcard: passes all other subcommands directly to the CLI.",
+                "examples": [
+                    f"chaitya {self.name} status",
+                    f"chaitya {self.name} log --oneline -5",
+                ],
+            }
+        ]
+        return {
+            "name": self.name,
+            "description": self.description or f"Wrapper for the {self.name} CLI tool.",
+            "commands": override_commands + wildcard,
+            "permissions": {
+                "fs_read": ["."],
+                "fs_write": ["."],
+                "network": True,
+                "can_emit_events": True,
+            },
+        }
+
+    async def passthrough(
+        self,
+        ctx: SessionContext,
+        *,
+        extra_args: list[str] | None = None,
+    ) -> tuple[bytes, int]:
+        """Execute the CLI with raw args passed through.
+
+        1. Checks blocklist
+        2. Runs override handler if exists
+        3. Otherwise: builds command string from raw args and runs via SessionRunner
+        4. Returns (output_bytes, exit_code)
+        """
+        sub = str(ctx.args.get("subcommand", "*"))
+        raw_args: list[str] = list(ctx.args.get("__raw_args__", []))
+
+        if extra_args:
+            raw_args = list(extra_args) + raw_args
+
+        if self.is_blocked(sub, raw_args):
+            return (
+                f"[blocked] '{self.name} {sub}' is disabled for safety.\n".encode(),
+                1,
+            )
+
+        if sub in self.overrides:
+            return await self.overrides[sub](ctx)
+
+        return await self._run_passthrough(ctx, raw_args)
+
+    async def _run_passthrough(
+        self,
+        ctx: SessionContext,
+        raw_args: list[str],
+    ) -> tuple[bytes, int]:
+        """Build and run the passthrough command via SessionRunner."""
+        import re
+
+        from chaitya_sdk.session import SessionRunner
+
+        session_name = str(ctx.args.get("session") or self.default_session)
+        cmd_str = " ".join([self.name, *raw_args]) if raw_args else self.name
+        patterns = self.completion_patterns or [
+            re.compile(r"muku@"),
+            re.compile(r"\[exit:"),
+            re.compile(r"\$ "),
+            re.compile(r">\s*$"),
+        ]
+
+        runner = SessionRunner(self.name, session_name, timeout=self.timeout)
+        try:
+            output, _elapsed = await runner.run(cmd_str, completion_patterns=patterns)
+            return output.encode("utf-8"), 0
+        except Exception as exc:
+            return f"[error] {self.name}: {exc}\n".encode(), 1

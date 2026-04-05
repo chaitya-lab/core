@@ -28,6 +28,7 @@ from chaitya_sdk import (
 )
 from chaitya_sdk.context import EventBusProxy
 from chaitya_sdk.decorator import _ADAPTER_REGISTRY
+from chaitya_sdk.wrappers import PassthroughCLI
 
 
 # ---------------------------------------------------------------------------
@@ -43,14 +44,21 @@ class TestPackageSurface:
     def test_all_prd_exports(self):
         """PRD §10 requires these exact names on the public surface."""
         for name in [
-            "adapter", "ChaityaStream", "SessionContext", "event_bus",
-            "Suspension", "InputSpec", "InputType", "PermissionDenied",
+            "adapter",
+            "ChaityaStream",
+            "SessionContext",
+            "event_bus",
+            "Suspension",
+            "InputSpec",
+            "InputType",
+            "PermissionDenied",
         ]:
             assert hasattr(chaitya_sdk, name), f"Missing: {name}"
 
     def test_no_core_dependency(self):
         """SDK must not import from chaitya.core at module level."""
         import sys
+
         # Check that no chaitya.core module was loaded as a dependency of the SDK
         sdk_modules = {m for m in sys.modules if m.startswith("chaitya_sdk")}
         # The SDK modules themselves should not have imported chaitya.core
@@ -59,8 +67,9 @@ class TestPackageSurface:
             # Check __dict__ for references to chaitya.core modules
             for attr_name, attr_val in vars(mod).items():
                 if hasattr(attr_val, "__module__") and attr_val.__module__:
-                    assert not attr_val.__module__.startswith("chaitya.core"), \
+                    assert not attr_val.__module__.startswith("chaitya.core"), (
                         f"SDK module {mod_name}.{attr_name} references chaitya.core"
+                    )
 
 
 # ---------------------------------------------------------------------------
@@ -153,14 +162,16 @@ class TestAdapterDecorator:
     def test_command_params(self):
         @adapter(
             name="test_params",
-            commands=[{
-                "name": "send",
-                "description": "Send mail",
-                "params": [
-                    {"name": "to", "required": True, "type": "string"},
-                    {"name": "body", "on_missing": "suspend"},
-                ],
-            }],
+            commands=[
+                {
+                    "name": "send",
+                    "description": "Send mail",
+                    "params": [
+                        {"name": "to", "required": True, "type": "string"},
+                        {"name": "body", "on_missing": "suspend"},
+                    ],
+                }
+            ],
         )
         def handler(stream, ctx):
             return b""
@@ -230,8 +241,10 @@ class TestEventBusProxy:
         class FakeBus:
             async def emit(self, event):
                 pass
+
             async def subscribe(self, handler, event_types=None, session_id=None):
                 pass
+
             async def unsubscribe(self, sub_id):
                 pass
 
@@ -250,8 +263,10 @@ class TestEventBusProxy:
         class FakeBus:
             async def emit(self, event):
                 emitted.append(event)
+
             async def subscribe(self, handler, event_types=None, session_id=None):
                 pass
+
             async def unsubscribe(self, sub_id):
                 pass
 
@@ -263,3 +278,121 @@ class TestEventBusProxy:
         asyncio.run(proxy.emit(Event(type="hello")))
         assert len(emitted) == 1
         assert emitted[0].type == "hello"
+
+
+# ---------------------------------------------------------------------------
+# PassthroughCLI — wildcard command wrapper
+# ---------------------------------------------------------------------------
+
+
+class TestPassthroughCLI:
+    def test_build_contract_has_wildcard(self):
+        cli = PassthroughCLI(name="git", description="Git wrapper")
+        contract = cli.build_contract()
+        assert contract["name"] == "git"
+        assert contract["description"] == "Git wrapper"
+        cmd_names = [c["name"] for c in contract["commands"]]
+        assert "*" in cmd_names
+
+    def test_build_contract_includes_overrides(self):
+        async def custom_handler(ctx):
+            return b"custom", 0
+
+        cli = PassthroughCLI(
+            name="kubectl",
+            overrides={"get": custom_handler},
+        )
+        contract = cli.build_contract()
+        cmd_names = [c["name"] for c in contract["commands"]]
+        assert "get" in cmd_names
+        assert "*" in cmd_names
+
+    def test_is_blocked_exact_match(self):
+        cli = PassthroughCLI(name="git", blocked=["push", "reset --hard"])
+        assert cli.is_blocked("push", []) is True
+        assert cli.is_blocked("reset --hard", []) is True
+        assert cli.is_blocked("status", []) is False
+
+    def test_is_blocked_prefix_match(self):
+        cli = PassthroughCLI(name="git", blocked=["clean -fd"])
+        assert cli.is_blocked("clean", ["-fd"]) is True
+        assert cli.is_blocked("clean", ["-f"]) is False
+        assert cli.is_blocked("status", []) is False
+
+    def test_is_blocked_full_args(self):
+        cli = PassthroughCLI(name="git", blocked=["reset --hard"])
+        assert cli.is_blocked("reset", ["--hard"]) is True
+        assert cli.is_blocked("reset", ["--soft"]) is False
+
+    def test_blocked_returns_error_bytes(self):
+        cli = PassthroughCLI(name="git", blocked=["push"])
+        ctx = SessionContext(args={"subcommand": "push", "__raw_args__": []})
+        result = asyncio.run(cli.passthrough(ctx))
+        assert result[1] == 1
+        assert b"blocked" in result[0]
+
+    def test_unknown_subcommand_passthrough(self):
+        cli = PassthroughCLI(name="nonexistent", timeout=1.0)
+        ctx = SessionContext(args={"subcommand": "status", "__raw_args__": ["-s"]})
+        result = asyncio.run(cli.passthrough(ctx))
+        assert result[1] == 1
+        assert b"error" in result[0] or b"not available" in result[0]
+
+
+# ---------------------------------------------------------------------------
+# Git adapter integration (requires git installed)
+# ---------------------------------------------------------------------------
+
+
+def _load_git_adapter():
+    """Load the git adapter module directly from the workspace path."""
+    import importlib.util
+    import sys
+    from pathlib import Path
+
+    src = (
+        Path(__file__).resolve().parents[1]
+        / "adaptors/community/chaitya/git/src/chaitya_adapter_git/__init__.py"
+    )
+    spec = importlib.util.spec_from_file_location("chaitya_adapter_git", src)
+    if spec is None or spec.loader is None:
+        return None
+    module = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(module)
+    except Exception:
+        return None
+    return module
+
+
+class TestGitAdapter:
+    def test_git_adapter_has_contract(self):
+        mod = _load_git_adapter()
+        assert mod is not None
+        assert mod.__adapter_contract__["name"] == "git"
+
+    def test_git_adapter_has_wildcard_command(self):
+        mod = _load_git_adapter()
+        assert mod is not None
+        cmd_names = [c["name"] for c in mod.__adapter_contract__["commands"]]
+        assert "*" in cmd_names
+
+    def test_git_adapter_has_blocked_commands(self):
+        mod = _load_git_adapter()
+        assert mod is not None
+        assert mod._git.is_blocked("push", []) is True
+        assert mod._git.is_blocked("reset --hard", []) is True
+        assert mod._git.is_blocked("status", []) is False
+
+    def test_git_status_passed_through(self):
+        mod = _load_git_adapter()
+        assert mod is not None
+        assert mod._git.default_session == "git-default"
+
+    def test_git_blocked_command_returns_error(self):
+        mod = _load_git_adapter()
+        assert mod is not None
+        ctx = SessionContext(args={"subcommand": "push", "__raw_args__": []})
+        result = asyncio.run(mod._git.passthrough(ctx))
+        assert result[1] == 1
+        assert b"blocked" in result[0]

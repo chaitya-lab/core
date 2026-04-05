@@ -1,0 +1,15 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "chaitya-adapter-git"
+version = "0.1.0a1"
+description = "Passthrough adapter for the git CLI — blocks dangerous commands, passes through the rest"
+requires-python = ">=3.11"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/chaitya_adapter_git"]
+
+[project.entry-points."chaitya.adapters"]
+git = "chaitya_adapter_git"
