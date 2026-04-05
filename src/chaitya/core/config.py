@@ -93,6 +93,7 @@ class CoreConfig:
     templates_dir: str = ""
     adapters_config_dir: str = ""
     adapter_search_paths: list[str] = field(default_factory=list)
+    enabled_adapters: list[str] = field(default_factory=list)
     disabled_adapters: list[str] = field(default_factory=list)
     supported_contract_versions: list[str] = field(default_factory=lambda: ["1"])
     system_adapters: list[str] = field(default_factory=lambda: ["file", "shell"])
@@ -145,6 +146,7 @@ def _resolve_defaults() -> dict[str, Any]:
         "templates_dir": str(base / "templates"),
         "adapters_config_dir": str(base / "adapters"),
         "adapter_search_paths": [],
+        "enabled_adapters": [],
         "disabled_adapters": [],
         "supported_contract_versions": ["1"],
         "system_adapters": ["file", "shell"],
@@ -216,6 +218,7 @@ _ENV_MAP: dict[str, tuple[str, ...]] = {
     "CHAITYA_TEMPLATES_DIR": ("templates_dir",),
     "CHAITYA_ADAPTERS_CONFIG_DIR": ("adapters_config_dir",),
     "CHAITYA_ADAPTER_PATHS": ("adapter_search_paths",),
+    "CHAITYA_ENABLED_ADAPTERS": ("enabled_adapters",),
     "CHAITYA_DISABLED_ADAPTERS": ("disabled_adapters",),
 }
 
@@ -254,6 +257,9 @@ def _apply_env_overrides(config: dict) -> dict:
             # Support both os.pathsep (';' on Windows, ':' on Unix) and ':'
             # Always use os.pathsep as authoritative; document it in config docs.
             target[final_key] = [part for part in value.split(os.pathsep) if part]
+        elif final_key == "enabled_adapters":
+            # Comma-separated list of adapter names
+            target[final_key] = [part.strip() for part in value.split(",") if part.strip()]
         elif final_key == "disabled_adapters":
             # Comma-separated list of adapter names
             target[final_key] = [part.strip() for part in value.split(",") if part.strip()]
@@ -328,6 +334,7 @@ def load_config(
         templates_dir=merged.get("templates_dir", ""),
         adapters_config_dir=merged.get("adapters_config_dir", ""),
         adapter_search_paths=merged.get("adapter_search_paths", []),
+        enabled_adapters=merged.get("enabled_adapters", []),
         disabled_adapters=merged.get("disabled_adapters", []),
         supported_contract_versions=merged.get("supported_contract_versions", ["1"]),
         system_adapters=merged.get("system_adapters", []),

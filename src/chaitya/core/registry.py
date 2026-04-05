@@ -275,23 +275,34 @@ class AdapterRegistry:
     - A ``__adapter_contract__`` dict attribute on the module.
 
     Adapters can be disabled via:
+    - ``enabled_adapters`` init parameter (whitelist — only these load)
     - ``disabled_adapters`` init parameter (from config)
-    - ``CHAITYA_DISABLED_ADAPTERS`` env var (comma-separated)
+    - ``CHAITYA_ENABLED_ADAPTERS`` / ``CHAITYA_DISABLED_ADAPTERS`` env vars (comma-separated)
     - ``disable(name)`` / ``enable(name)`` runtime calls
+
+    If ``enabled_adapters`` is set, only those adapters load (whitelist).
+    ``disabled_adapters`` filters further (blacklist).
     """
 
     def __init__(
         self,
         search_paths: list[str] | None = None,
+        enabled_adapters: list[str] | None = None,
         disabled_adapters: list[str] | None = None,
     ) -> None:
         self._loaded: dict[str, AdapterPackage] = {}
         self._handlers: dict[str, Callable] = {}
         self._search_paths: list[str] = list(search_paths or [])
+
+        env_enabled = os.environ.get("CHAITYA_ENABLED_ADAPTERS", "")
+        env_enabled_list = [a.strip() for a in env_enabled.split(",") if a.strip()]
+        configured_enabled = list(enabled_adapters or [])
+        self._enabled: set[str] = set(configured_enabled + env_enabled_list)
+
         env_disabled = os.environ.get("CHAITYA_DISABLED_ADAPTERS", "")
-        env_list = [a.strip() for a in env_disabled.split(",") if a.strip()]
-        configured = list(disabled_adapters or [])
-        self._disabled: set[str] = set(configured + env_list)
+        env_disabled_list = [a.strip() for a in env_disabled.split(",") if a.strip()]
+        configured_disabled = list(disabled_adapters or [])
+        self._disabled: set[str] = set(configured_disabled + env_disabled_list)
 
     def set_search_paths(self, search_paths: list[str]) -> None:
         """Replace additional filesystem search paths for adaptors."""
@@ -321,22 +332,42 @@ class AdapterRegistry:
         self._disabled.add(name)
         return True
 
-    def enable(self, name: str) -> bool:
-        """Re-enable a previously disabled adapter."""
-        self._disabled.discard(name)
-        return name not in self._disabled
-
     def is_disabled(self, name: str) -> bool:
         """Return True if the adapter is disabled."""
         return name in self._disabled
+
+    @property
+    def enabled_names(self) -> frozenset[str]:
+        """Explicitly enabled adapter names. Empty means all are allowed."""
+        return frozenset(self._enabled)
+
+    def enable(self, name: str) -> bool:
+        """Add adapter to enabled list and remove from disabled list."""
+        self._disabled.discard(name)
+        self._enabled.add(name)
+        return True
+
+    def only_enable(self, names: list[str]) -> None:
+        """Set the enabled list to exactly these names. Clears previous enabled list."""
+        self._enabled = set(names)
+
+    def _is_allowed(self, name: str) -> bool:
+        """Return True if the adapter is allowed to load.
+
+        Logic:
+        - If _enabled is non-empty, adapter must be in _enabled (whitelist).
+        - Then _disabled is applied (blacklist).
+        """
+        if self._enabled and name not in self._enabled:
+            return False
+        return name not in self._disabled
 
     # -- AdapterLoaderProtocol methods --
 
     async def discover(self) -> list[AdapterPackage]:
         """Discover adapter packages via pip entry points and workspace paths.
 
-        Disabled adapters (via config, env var, or runtime ``disable()``) are
-        excluded from the returned list and logged as skipped.
+        Filters by ``enabled_adapters`` (whitelist) then ``disabled_adapters`` (blacklist).
         """
         packages: list[AdapterPackage] = []
         packages.extend(self._discover_workspace_packages())
@@ -355,8 +386,11 @@ class AdapterRegistry:
                     "Skipping pip entry point %r — handled as built-in kernel command", ep.name
                 )
                 continue
-            if ep.name in self._disabled:
-                logger.info("Adapter %r is disabled — skipping.", ep.name)
+            if not self._is_allowed(ep.name):
+                if self._enabled and ep.name not in self._enabled:
+                    logger.info("Adapter %r not in enabled list — skipping.", ep.name)
+                else:
+                    logger.info("Adapter %r is disabled — skipping.", ep.name)
                 continue
             try:
                 pkg = self._load_entry_point(ep)
@@ -527,10 +561,15 @@ class AdapterRegistry:
 
         Validates the contract first.  Raises ``AdapterLoadError`` on failure.
         """
-        if package.name in self._disabled:
+        if not self._is_allowed(package.name):
             package.status = AdapterStatus.REJECTED
-            package.error = f"Adapter '{package.name}' is disabled (via config, env, or runtime)."
-            logger.info("Skipping disabled adapter: %s", package.name)
+            if self._enabled and package.name not in self._enabled:
+                package.error = f"Adapter '{package.name}' is not in the enabled list."
+            else:
+                package.error = (
+                    f"Adapter '{package.name}' is disabled (via config, env, or runtime)."
+                )
+            logger.info("Skipping adapter %s: %s", package.name, package.error)
             raise AdapterLoadError(package.name, package.error)
 
         if package.name in self.loaded_names:

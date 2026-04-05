@@ -159,6 +159,7 @@ class Kernel:
         cli_name: str = "chaitya",
         session_backend: str = "local",
         adapter_search_paths: list[str] | None = None,
+        enabled_adapters: list[str] | None = None,
         disabled_adapters: list[str] | None = None,
         system_adapters: frozenset[str] | None = None,
         overflow_dir: str | None = None,
@@ -197,6 +198,7 @@ class Kernel:
         self._pipeline = PipelineOrchestrator(overflow_dir=overflow_dir)
         self._registry = AdapterRegistry(
             search_paths=adapter_search_paths or [],
+            enabled_adapters=enabled_adapters or [],
             disabled_adapters=disabled_adapters or [],
         )
 
@@ -212,6 +214,7 @@ class Kernel:
                 config.adapters_config_dir,
                 *config.adapter_search_paths,
             ],
+            enabled_adapters=config.enabled_adapters,
             disabled_adapters=config.disabled_adapters,
             system_adapters=frozenset(config.system_adapters),
             overflow_dir=config.kernel.tmp_dir or None,
@@ -1327,8 +1330,7 @@ class Kernel:
                 return b"Usage: registry disable <adapter-name>\n", 1
             self._registry.disable(name)
             return (
-                f"Adapter '{name}' disabled. "
-                f"Restart kernel or set CHAITYA_DISABLED_ADAPTERS to prevent loading.\n".encode(),
+                f"Adapter '{name}' disabled.\n".encode(),
                 0,
             )
 
@@ -1336,11 +1338,8 @@ class Kernel:
             name = ctx.env.get("name") or (positional[0] if positional else "")
             if not name:
                 return b"Usage: registry enable <adapter-name>\n", 1
-            was_disabled = self._registry.is_disabled(name)
             self._registry.enable(name)
-            if was_disabled:
-                return f"Adapter '{name}' enabled.\n".encode(), 0
-            return f"Adapter '{name}' was not disabled.\n".encode(), 0
+            return f"Adapter '{name}' added to enabled list.\n".encode(), 0
 
         if sub == "list":
             adapters = self._registry.loaded_adapters
@@ -1357,7 +1356,14 @@ class Kernel:
                 for name in sorted(disabled):
                     if name not in adapters:
                         lines.append(f"  {name:18s} (not loaded)")
-            lines.append(f"\n{len(adapters)} adapter(s) loaded, {len(disabled)} disabled.")
+            enabled = self._registry.enabled_names
+            if enabled:
+                lines.append("")
+                lines.append("Enabled adapters (whitelist):")
+                for name in sorted(enabled):
+                    status = "loaded" if name in adapters else "(none)"
+                    lines.append(f"  {name:18s} {status}")
+            lines.append(f"\n{len(adapters)} adapter(s) loaded.")
             return "\n".join(lines).encode("utf-8"), 0
 
         if sub == "info":
@@ -1370,7 +1376,13 @@ class Kernel:
             if pkg.contract:
                 c = pkg.contract
                 is_disabled = self._registry.is_disabled(name)
-                status = "disabled" if is_disabled else pkg.status.value
+                is_enabled = name in self._registry.enabled_names
+                if is_disabled:
+                    status = "disabled"
+                elif is_enabled:
+                    status = "loaded (enabled)"
+                else:
+                    status = pkg.status.value
                 lines = [
                     f"Adapter: {c.name}",
                     f"Description: {c.description}",
