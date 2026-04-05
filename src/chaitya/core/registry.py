@@ -14,9 +14,14 @@ import importlib
 import importlib.util
 import json
 import logging
+import os
 import sys
-from collections.abc import Callable
 from importlib.metadata import entry_points
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -268,12 +273,25 @@ class AdapterRegistry:
     that exposes either:
     - A ``module.json`` file alongside it, OR
     - A ``__adapter_contract__`` dict attribute on the module.
+
+    Adapters can be disabled via:
+    - ``disabled_adapters`` init parameter (from config)
+    - ``CHAITYA_DISABLED_ADAPTERS`` env var (comma-separated)
+    - ``disable(name)`` / ``enable(name)`` runtime calls
     """
 
-    def __init__(self, search_paths: list[str] | None = None) -> None:
+    def __init__(
+        self,
+        search_paths: list[str] | None = None,
+        disabled_adapters: list[str] | None = None,
+    ) -> None:
         self._loaded: dict[str, AdapterPackage] = {}
         self._handlers: dict[str, Callable] = {}
         self._search_paths: list[str] = list(search_paths or [])
+        env_disabled = os.environ.get("CHAITYA_DISABLED_ADAPTERS", "")
+        env_list = [a.strip() for a in env_disabled.split(",") if a.strip()]
+        configured = list(disabled_adapters or [])
+        self._disabled: set[str] = set(configured + env_list)
 
     def set_search_paths(self, search_paths: list[str]) -> None:
         """Replace additional filesystem search paths for adaptors."""
@@ -288,10 +306,38 @@ class AdapterRegistry:
     def loaded_names(self) -> frozenset[str]:
         return frozenset(self._loaded.keys())
 
+    @property
+    def disabled_names(self) -> frozenset[str]:
+        """Adapter names that are disabled and will not be loaded."""
+        return frozenset(self._disabled)
+
+    def disable(self, name: str) -> bool:
+        """Disable an adapter by name. Returns True if it was loaded.
+
+        If the adapter is currently loaded, it will remain loaded until the
+        next kernel restart (use ``unload`` to remove it now).
+        Disabled adapters will be skipped on the next boot.
+        """
+        self._disabled.add(name)
+        return True
+
+    def enable(self, name: str) -> bool:
+        """Re-enable a previously disabled adapter."""
+        self._disabled.discard(name)
+        return name not in self._disabled
+
+    def is_disabled(self, name: str) -> bool:
+        """Return True if the adapter is disabled."""
+        return name in self._disabled
+
     # -- AdapterLoaderProtocol methods --
 
     async def discover(self) -> list[AdapterPackage]:
-        """Discover adapter packages via pip entry points."""
+        """Discover adapter packages via pip entry points and workspace paths.
+
+        Disabled adapters (via config, env var, or runtime ``disable()``) are
+        excluded from the returned list and logged as skipped.
+        """
         packages: list[AdapterPackage] = []
         packages.extend(self._discover_workspace_packages())
         eps = entry_points()
@@ -308,6 +354,9 @@ class AdapterRegistry:
                 logger.debug(
                     "Skipping pip entry point %r — handled as built-in kernel command", ep.name
                 )
+                continue
+            if ep.name in self._disabled:
+                logger.info("Adapter %r is disabled — skipping.", ep.name)
                 continue
             try:
                 pkg = self._load_entry_point(ep)
@@ -478,6 +527,12 @@ class AdapterRegistry:
 
         Validates the contract first.  Raises ``AdapterLoadError`` on failure.
         """
+        if package.name in self._disabled:
+            package.status = AdapterStatus.REJECTED
+            package.error = f"Adapter '{package.name}' is disabled (via config, env, or runtime)."
+            logger.info("Skipping disabled adapter: %s", package.name)
+            raise AdapterLoadError(package.name, package.error)
+
         if package.name in self.loaded_names:
             package.status = AdapterStatus.REJECTED
             package.error = f"Name collision: adapter '{package.name}' is already loaded."

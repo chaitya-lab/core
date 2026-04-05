@@ -36,6 +36,7 @@ def _default_session_backend_name() -> str:
         return "psmux"
     return "local"
 
+
 # ---------------------------------------------------------------------------
 # Config data classes — frozen after creation
 # ---------------------------------------------------------------------------
@@ -92,10 +93,9 @@ class CoreConfig:
     templates_dir: str = ""
     adapters_config_dir: str = ""
     adapter_search_paths: list[str] = field(default_factory=list)
+    disabled_adapters: list[str] = field(default_factory=list)
     supported_contract_versions: list[str] = field(default_factory=lambda: ["1"])
-    system_adapters: list[str] = field(
-        default_factory=lambda: ["file", "shell"]
-    )
+    system_adapters: list[str] = field(default_factory=lambda: ["file", "shell"])
 
 
 # ---------------------------------------------------------------------------
@@ -145,6 +145,7 @@ def _resolve_defaults() -> dict[str, Any]:
         "templates_dir": str(base / "templates"),
         "adapters_config_dir": str(base / "adapters"),
         "adapter_search_paths": [],
+        "disabled_adapters": [],
         "supported_contract_versions": ["1"],
         "system_adapters": ["file", "shell"],
     }
@@ -165,8 +166,7 @@ def _load_yaml_file(path: Path) -> dict[str, Any]:
         import yaml  # Optional dependency — graceful degradation
     except ImportError:
         logger.warning(
-            "PyYAML not installed — skipping config file %s. "
-            "Install with: pip install pyyaml",
+            "PyYAML not installed — skipping config file %s. Install with: pip install pyyaml",
             path,
         )
         return {}
@@ -216,6 +216,7 @@ _ENV_MAP: dict[str, tuple[str, ...]] = {
     "CHAITYA_TEMPLATES_DIR": ("templates_dir",),
     "CHAITYA_ADAPTERS_CONFIG_DIR": ("adapters_config_dir",),
     "CHAITYA_ADAPTER_PATHS": ("adapter_search_paths",),
+    "CHAITYA_DISABLED_ADAPTERS": ("disabled_adapters",),
 }
 
 # Fields that should be coerced to int
@@ -247,14 +248,15 @@ def _apply_env_overrides(config: dict) -> dict:
             try:
                 target[final_key] = int(value)
             except ValueError:
-                logger.warning(
-                    "Ignoring %s=%r — expected integer", env_var, value
-                )
+                logger.warning("Ignoring %s=%r — expected integer", env_var, value)
                 continue
         elif final_key == "adapter_search_paths":
             # Support both os.pathsep (';' on Windows, ':' on Unix) and ':'
             # Always use os.pathsep as authoritative; document it in config docs.
             target[final_key] = [part for part in value.split(os.pathsep) if part]
+        elif final_key == "disabled_adapters":
+            # Comma-separated list of adapter names
+            target[final_key] = [part.strip() for part in value.split(",") if part.strip()]
         else:
             target[final_key] = value
 
@@ -295,25 +297,38 @@ def load_config(
 
     # 4. Build frozen config objects
     return CoreConfig(
-        kernel=KernelConfig(**{
-            k: v for k, v in merged.get("kernel", {}).items()
-            if k in KernelConfig.__dataclass_fields__
-        }),
-        store=StoreConfig(**{
-            k: v for k, v in merged.get("store", {}).items()
-            if k in StoreConfig.__dataclass_fields__
-        }),
-        event_bus=EventBusConfig(**{
-            k: v for k, v in merged.get("event_bus", {}).items()
-            if k in EventBusConfig.__dataclass_fields__
-        }),
-        session=SessionConfig(**{
-            k: v for k, v in merged.get("session", {}).items()
-            if k in SessionConfig.__dataclass_fields__
-        }),
+        kernel=KernelConfig(
+            **{
+                k: v
+                for k, v in merged.get("kernel", {}).items()
+                if k in KernelConfig.__dataclass_fields__
+            }
+        ),
+        store=StoreConfig(
+            **{
+                k: v
+                for k, v in merged.get("store", {}).items()
+                if k in StoreConfig.__dataclass_fields__
+            }
+        ),
+        event_bus=EventBusConfig(
+            **{
+                k: v
+                for k, v in merged.get("event_bus", {}).items()
+                if k in EventBusConfig.__dataclass_fields__
+            }
+        ),
+        session=SessionConfig(
+            **{
+                k: v
+                for k, v in merged.get("session", {}).items()
+                if k in SessionConfig.__dataclass_fields__
+            }
+        ),
         templates_dir=merged.get("templates_dir", ""),
         adapters_config_dir=merged.get("adapters_config_dir", ""),
         adapter_search_paths=merged.get("adapter_search_paths", []),
+        disabled_adapters=merged.get("disabled_adapters", []),
         supported_contract_versions=merged.get("supported_contract_versions", ["1"]),
         system_adapters=merged.get("system_adapters", []),
     )

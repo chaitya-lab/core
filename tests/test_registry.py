@@ -149,7 +149,6 @@ class TestValidation:
         assert any("example" in e.lower() for e in result.errors)
 
 
-
 # ---------------------------------------------------------------------------
 # Dependency Graph
 # ---------------------------------------------------------------------------
@@ -301,3 +300,44 @@ class TestAdapterRegistry:
         packages = reg._discover_workspace_packages()
         shell_pkg = next(pkg for pkg in packages if pkg.name == "shell")
         assert shell_pkg.handler is not None
+
+
+# ---------------------------------------------------------------------------
+# AdapterRegistry — disable / enable
+# ---------------------------------------------------------------------------
+
+
+class TestDisableEnable:
+    async def test_disable_by_name(self) -> None:
+        reg = AdapterRegistry()
+        assert "browser" not in reg.disabled_names
+        reg.disable("browser")
+        assert "browser" in reg.disabled_names
+        assert reg.is_disabled("browser") is True
+
+    async def test_enable_after_disable(self) -> None:
+        reg = AdapterRegistry()
+        reg.disable("browser")
+        reg.enable("browser")
+        assert "browser" not in reg.disabled_names
+        assert reg.is_disabled("browser") is False
+
+    async def test_enable_unknown_is_noop(self) -> None:
+        reg = AdapterRegistry()
+        result = reg.enable("never-disabled")
+        assert result is True
+        assert "never-disabled" not in reg.disabled_names
+
+    async def test_disabled_adapter_blocked_on_load(self) -> None:
+        reg = AdapterRegistry(disabled_adapters=["test-adapter"])
+        pkg = _pkg("test-adapter")
+        with pytest.raises(AdapterLoadError, match="disabled"):
+            await reg.load(pkg)
+        assert "test-adapter" not in reg.loaded_names
+
+    async def test_not_disabled_loads_normally(self) -> None:
+        reg = AdapterRegistry(disabled_adapters=["other"])
+        pkg = _pkg("test-adapter")
+        contract = await reg.load(pkg)
+        assert contract.name == "test-adapter"
+        assert "test-adapter" in reg.loaded_names

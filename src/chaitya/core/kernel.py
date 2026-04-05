@@ -159,6 +159,7 @@ class Kernel:
         cli_name: str = "chaitya",
         session_backend: str = "local",
         adapter_search_paths: list[str] | None = None,
+        disabled_adapters: list[str] | None = None,
         system_adapters: frozenset[str] | None = None,
         overflow_dir: str | None = None,
         stuck_threshold_seconds: int = 60,
@@ -194,7 +195,10 @@ class Kernel:
             templates_dir=templates_dir,
         )
         self._pipeline = PipelineOrchestrator(overflow_dir=overflow_dir)
-        self._registry = AdapterRegistry(search_paths=adapter_search_paths or [])
+        self._registry = AdapterRegistry(
+            search_paths=adapter_search_paths or [],
+            disabled_adapters=disabled_adapters or [],
+        )
 
     @classmethod
     def from_config(cls, config: CoreConfig) -> Kernel:
@@ -208,6 +212,7 @@ class Kernel:
                 config.adapters_config_dir,
                 *config.adapter_search_paths,
             ],
+            disabled_adapters=config.disabled_adapters,
             system_adapters=frozenset(config.system_adapters),
             overflow_dir=config.kernel.tmp_dir or None,
             stuck_threshold_seconds=config.session.stuck_threshold_seconds,
@@ -951,6 +956,8 @@ class Kernel:
         lines.append("  output --format json|text             Set output format")
         lines.append("")
         lines.append("  registry list                         List loaded adapters")
+        lines.append("  registry disable <name>               Disable an adapter")
+        lines.append("  registry enable <name>                Re-enable an adapter")
         lines.append("  registry validate <name>             Validate an adapter contract")
         lines.append("")
         lines.append("  <adapter> <subcommand> [args]        Run adapter command")
@@ -1314,16 +1321,43 @@ class Kernel:
         sub = ctx.env.get("__subcommand__", "list")
         positional = ctx.env.get("__args__", [])
 
+        if sub == "disable":
+            name = ctx.env.get("name") or (positional[0] if positional else "")
+            if not name:
+                return b"Usage: registry disable <adapter-name>\n", 1
+            self._registry.disable(name)
+            return (
+                f"Adapter '{name}' disabled. "
+                f"Restart kernel or set CHAITYA_DISABLED_ADAPTERS to prevent loading.\n".encode(),
+                0,
+            )
+
+        if sub == "enable":
+            name = ctx.env.get("name") or (positional[0] if positional else "")
+            if not name:
+                return b"Usage: registry enable <adapter-name>\n", 1
+            was_disabled = self._registry.is_disabled(name)
+            self._registry.enable(name)
+            if was_disabled:
+                return f"Adapter '{name}' enabled.\n".encode(), 0
+            return f"Adapter '{name}' was not disabled.\n".encode(), 0
+
         if sub == "list":
             adapters = self._registry.loaded_adapters
-            if not adapters:
-                return b"No adapters loaded.", 0
+            disabled = self._registry.disabled_names
             lines = [f"{'NAME':20s} {'STATUS':12s} DESCRIPTION"]
             lines.append("-" * 70)
             for name, pkg in sorted(adapters.items()):
+                status = "disabled" if name in disabled else pkg.status.value
                 desc = pkg.contract.description[:30] if pkg.contract else ""
-                lines.append(f"{name:20s} {pkg.status.value:12s} {desc}")
-            lines.append(f"\n{len(adapters)} adapter(s) loaded.")
+                lines.append(f"{name:20s} {status:12s} {desc}")
+            if disabled:
+                lines.append("")
+                lines.append("Disabled adapters:")
+                for name in sorted(disabled):
+                    if name not in adapters:
+                        lines.append(f"  {name:18s} (not loaded)")
+            lines.append(f"\n{len(adapters)} adapter(s) loaded, {len(disabled)} disabled.")
             return "\n".join(lines).encode("utf-8"), 0
 
         if sub == "info":
@@ -1335,11 +1369,13 @@ class Kernel:
                 return f"Adapter '{name}' not found.".encode(), 1
             if pkg.contract:
                 c = pkg.contract
+                is_disabled = self._registry.is_disabled(name)
+                status = "disabled" if is_disabled else pkg.status.value
                 lines = [
                     f"Adapter: {c.name}",
                     f"Description: {c.description}",
                     f"Contract version: {c.contract_version}",
-                    f"Status: {pkg.status.value}",
+                    f"Status: {status}",
                     f"Entry point: {pkg.entry_point}",
                 ]
                 if c.commands:
@@ -1369,6 +1405,7 @@ class Kernel:
             return "\n".join(lines).encode("utf-8"), 1
 
         return (
-            f"Unknown registry subcommand: {sub}\nUsage: registry <list|info|validate>".encode(),
+            f"Unknown registry subcommand: {sub}\n"
+            f"Usage: registry <list|info|disable|enable|validate>".encode(),
             1,
         )
