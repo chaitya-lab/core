@@ -2,7 +2,7 @@
 
 Uses Chaitya's existing session management (tmux) as the execution substrate.
 OpenCode runs as an interactive shell inside a named tmux session.
-The adapter wraps session commands to send prompts and read responses.
+The adapter sends prompts and reads responses via kernel session commands.
 
 No HTTP servers, no ACP subprocesses. The kernel's session infrastructure
 (tmux) handles PTY allocation, I/O streaming, and session state.
@@ -18,7 +18,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
-import uuid
+import time
 from dataclasses import asdict
 from typing import Any
 
@@ -36,46 +36,100 @@ _POLL_INTERVAL = 0.5
 _DEFAULT_TIMEOUT = 300.0
 
 
-def _poll_until_done(
-    session_name: str,
-    last_len: int,
-    timeout: float,
-) -> tuple[str, float]:
-    import time
-
-    start = time.monotonic()
-    from chaitya.core.kernel import Kernel
-
-    kernel = Kernel._instance  # type: ignore[attr-defined]
-    if kernel is None:
-        return "", 0.0
-
-    while time.monotonic() - start < timeout:
-        import asyncio
-
-        asyncio.get_event_loop().run_until_complete(asyncio.sleep(_POLL_INTERVAL))
-        output = asyncio.get_event_loop().run_until_complete(
-            kernel.dispatch(f"session output {session_name}")
-        )
-        if len(output.processed) > last_len:
-            new_text = output.processed[last_len:]
-            if _looks_done(new_text):
-                return output.processed, time.monotonic() - start
-
-    return "", timeout
+# ---------------------------------------------------------------------------
+# Session command helper
+# ---------------------------------------------------------------------------
 
 
-def _looks_done(text: str) -> bool:
-    patterns = [
-        r"muku@",  # shell prompt
-        r"\[exit:",  # L2 footer
-        r"\$ ",  # bash prompt
-    ]
-    return any(re.search(p, text) for p in patterns)
+class _SessionHelper:
+    """Thin wrapper around kernel session commands for the opencode adapter.
+
+    Adapters must use kernel session commands (not direct subprocess calls)
+    to interact with tmux sessions. This helper provides a clean interface.
+    """
+
+    def __init__(self) -> None:
+        self._kernel: Any = None
+
+    def _get_kernel(self) -> Any:
+        if self._kernel is None:
+            from chaitya.core import kernel as kmod
+
+            self._kernel = getattr(kmod, "_instance", None)
+        return self._kernel
+
+    async def _dispatch(self, expr: str) -> Any:
+        k = self._get_kernel()
+        if k is None:
+            return None
+        return await k.dispatch(expr)
+
+    async def status(self, name: str) -> tuple[bool, str]:
+        r = await self._dispatch(f"session status {name}")
+        return r is not None and r.exit_code == 0, r.processed if r else ""
+
+    async def create(self, name: str) -> bool:
+        r = await self._dispatch(f"session create {name}")
+        return r is not None and r.exit_code == 0
+
+    async def output(self, name: str) -> str:
+        r = await self._dispatch(f"session output {name}")
+        return r.processed if r else ""
+
+    async def send_input(self, name: str, text: str, newline: bool = True) -> bool:
+        text_with_nl = text + ("\n" if newline else "")
+        try:
+            kernel = self._get_kernel()
+            if kernel is None:
+                return False
+            await kernel._session_mgr.send_input(name, text_with_nl.encode("utf-8"))
+            return True
+        except Exception:
+            return False
+
+    async def list_sessions(self) -> list[dict[str, str]]:
+        r = await self._dispatch("session list")
+        if not r or r.exit_code != 0:
+            return []
+        sessions = []
+        for line in r.processed.splitlines():
+            parts = line.split()
+            if len(parts) >= 2:
+                sessions.append({"name": parts[0], "state": parts[1] if len(parts) > 1 else ""})
+        return sessions
+
+    async def kill(self, name: str) -> bool:
+        r = await self._dispatch(f"session kill {name}")
+        return r is not None and r.exit_code == 0
+
+
+_session = _SessionHelper()
 
 
 # ---------------------------------------------------------------------------
-# Chaitya adapter contract
+# Output detection patterns
+# ---------------------------------------------------------------------------
+
+_SHELL_PROMPT_PATTERNS = [
+    re.compile(r"muku@"),
+    re.compile(r"\[exit:"),
+    re.compile(r"\$ "),
+    re.compile(r">\s*$"),
+]
+
+
+def _looks_done(text: str) -> bool:
+    """Return True if text contains a shell prompt or L2 footer."""
+    return any(p.search(text) for p in _SHELL_PROMPT_PATTERNS)
+
+
+def _extract_output(full_output: str, last_len: int) -> str:
+    """Extract the new output since last_len."""
+    return full_output[last_len:] if last_len < len(full_output) else ""
+
+
+# ---------------------------------------------------------------------------
+# Contract
 # ---------------------------------------------------------------------------
 
 _opencode_contract = {
@@ -161,10 +215,8 @@ async def opencode_handler(
 
     if sub == "run":
         return await _handle_run(ctx)
-
     if sub == "session":
         return await _handle_session(ctx)
-
     if sub == "watch":
         return await _handle_watch(ctx)
 
@@ -184,36 +236,18 @@ async def _handle_run(ctx: SessionContext) -> tuple[bytes, int]:
     if not prompt:
         return b"opencode run: --prompt is required\n", 1
 
-    from chaitya.core.kernel import Kernel
+    exists, _ = await _session.status(session_name)
+    if not exists:
+        created = await _session.create(session_name)
+        if not created:
+            return f"Failed to create session {session_name}\n".encode("utf-8"), 1
 
-    kernel = _get_kernel()
-    if kernel is None:
-        return b"Kernel not accessible from adapter\n", 1
+    output_before = await _session.output(session_name)
+    last_len = len(output_before)
 
-    raw_args = ctx.env.get("__args__", [])
-    positional_prompt = raw_args[0] if raw_args else ""
-    if positional_prompt and positional_prompt not in ("list", "create", "kill", "status"):
-        prompt = positional_prompt
-
-    try:
-        status = await kernel.dispatch(f"session status {session_name}")
-        if status.exit_code != 0:
-            create = await kernel.dispatch(f"session create {session_name}")
-            if create.exit_code != 0:
-                return f"Failed to create session {session_name}: {create.processed}\n".encode(), 1
-    except Exception:
-        create = await kernel.dispatch(f"session create {session_name}")
-        if create.exit_code != 0:
-            return f"Failed to create session {session_name}: {create.processed}\n".encode(), 1
-
-    output_before = await kernel.dispatch(f"session output {session_name}")
-    last_len = len(output_before.processed)
-
-    sent = await kernel.dispatch(
-        f'session send-input {session_name} "opencode run {prompt}" --newline'
-    )
-    if sent.exit_code != 0:
-        return f"Failed to send prompt: {sent.processed}\n".encode(), 1
+    sent = await _session.send_input(session_name, f"opencode run '{prompt}'")
+    if not sent:
+        return f"Failed to send prompt to session {session_name}\n".encode("utf-8"), 1
 
     await event_bus.emit(
         Event(
@@ -224,7 +258,7 @@ async def _handle_run(ctx: SessionContext) -> tuple[bytes, int]:
         )
     )
 
-    result, elapsed = await _poll_output(kernel, session_name, last_len, timeout)
+    result, elapsed = await _poll_output(session_name, last_len, timeout)
 
     await event_bus.emit(
         Event(
@@ -240,26 +274,26 @@ async def _handle_run(ctx: SessionContext) -> tuple[bytes, int]:
         )
     )
 
-    return result.encode("utf-8"), 0
+    new_output = _extract_output(result, last_len)
+    return new_output.encode("utf-8"), 0
 
 
 async def _poll_output(
-    kernel: Any,
     session_name: str,
     last_len: int,
     timeout: float,
 ) -> tuple[str, float]:
-    import time
-
     start = time.monotonic()
+    full_output = ""
     while time.monotonic() - start < timeout:
         await asyncio.sleep(_POLL_INTERVAL)
-        output = await kernel.dispatch(f"session output {session_name}")
-        if len(output.processed) > last_len:
-            new_text = output.processed[last_len:]
-            if _looks_done(new_text):
-                return output.processed, time.monotonic() - start
-    return "", timeout
+        output = await _session.output(session_name)
+        full_output = output
+        if len(output) > last_len:
+            if _looks_done(output):
+                return output, time.monotonic() - start
+            last_len = len(output)
+    return full_output, timeout
 
 
 # ---------------------------------------------------------------------------
@@ -273,31 +307,32 @@ async def _handle_session(ctx: SessionContext) -> tuple[bytes, int]:
     action = str(ctx.args.get("action") or positional)
     session_name = str(ctx.args.get("session") or "")
 
-    kernel = _get_kernel()
-    if kernel is None:
-        return b"Kernel not accessible from adapter\n", 1
-
     if action == "list":
-        result = await kernel.dispatch("session list")
-        return result.processed.encode(), result.exit_code
+        r = await _session.list_sessions()
+        lines = [f"{s['name']}  {s['state']}" for s in r]
+        output = "\n".join(lines) + "\n" if lines else "(no sessions)\n"
+        return output.encode("utf-8"), 0
 
     if action == "create":
-        if not session_name:
-            session_name = _DEFAULT_SESSION
-        result = await kernel.dispatch(f"session create {session_name}")
-        return result.processed.encode(), result.exit_code
+        name = session_name or _DEFAULT_SESSION
+        ok = await _session.create(name)
+        return (f"Session '{name}' created\n" if ok else f"Failed to create '{name}'\n").encode(
+            "utf-8"
+        ), 0 if ok else 1
 
     if action == "kill":
         if not session_name:
             return b"Usage: opencode session kill --session <name>\n", 1
-        result = await kernel.dispatch(f"session kill {session_name}")
-        return result.processed.encode(), result.exit_code
+        ok = await _session.kill(session_name)
+        return (
+            f"Session '{session_name}' killed\n" if ok else f"Failed to kill '{session_name}'\n"
+        ).encode("utf-8"), 0 if ok else 1
 
     if action == "status":
         if not session_name:
             return b"Usage: opencode session status --session <name>\n", 1
-        result = await kernel.dispatch(f"session status {session_name}")
-        return result.processed.encode(), result.exit_code
+        ok, output = await _session.status(session_name)
+        return output.encode("utf-8"), 0 if ok else 1
 
     return f"Unknown session action: {action}\n".encode("utf-8"), 1
 
@@ -322,7 +357,7 @@ async def _handle_watch(ctx: SessionContext) -> tuple[bytes, int]:
             return
         if session_filter and event.session_id != session_filter:
             return
-        if on_filter and not any(on_filter in t for t in [event.type]):
+        if on_filter and on_filter not in event.type:
             return
         line = json.dumps({"type": event.type, "payload": event.payload}, default=str)
         async with lock:
@@ -343,15 +378,8 @@ async def _handle_watch(ctx: SessionContext) -> tuple[bytes, int]:
 
 
 # ---------------------------------------------------------------------------
-# Kernel reference — adapters use module-level _instance set during boot
+# Module exports (Chaitya SDK contract)
 # ---------------------------------------------------------------------------
-
-
-def _get_kernel() -> Any:
-    from chaitya.core import kernel as kmod
-
-    return getattr(kmod, "_instance", None)
-
 
 __chaitya_handler__ = opencode_handler
 __adapter_contract__ = asdict(opencode_handler.__chaitya_contract__)

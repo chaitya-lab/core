@@ -70,6 +70,16 @@ from chaitya_sdk.types import (  # noqa: F401
     Subscription,
     Suspension,
 )
+from chaitya_sdk.wrappers import (  # noqa: F401
+    CLIWrapper,
+    CommandResult,
+    ActivityState,
+    detect_activity_from_output,
+    format_exit_code_note,
+    run_cli,
+    shell_escape,
+    stream_cli,
+)
 
 __all__ = [
     # Decorator
@@ -120,4 +130,13 @@ __all__ = [
     "SESSION_STUCK",
     "STDERR_CHUNK",
     "STDOUT_CHUNK",
+    # CLI wrappers
+    "CLIWrapper",
+    "CommandResult",
+    "ActivityState",
+    "detect_activity_from_output",
+    "format_exit_code_note",
+    "run_cli",
+    "shell_escape",
+    "stream_cli",
 ]

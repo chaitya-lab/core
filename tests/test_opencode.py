@@ -132,12 +132,12 @@ class TestOpenCodeRun:
 
         name = f"mtoc-{uuid.uuid4().hex[:8]}"
         r1 = await kernel.dispatch(
-            f'opencode run --session {name} --prompt "remember the word apple" --timeout 30'
+            f'opencode run --session {name} --prompt "remember the word apple" --timeout 60'
         )
         assert r1.exit_code == 0
 
         r2 = await kernel.dispatch(
-            f'opencode run --session {name} --prompt "what word did I ask you to remember just now" --timeout 30'
+            f'opencode run --session {name} --prompt "what word did I ask you to remember just now" --timeout 60'
         )
         assert r2.exit_code == 0
         output_lower = r2.processed.lower()

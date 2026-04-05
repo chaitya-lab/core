@@ -118,9 +118,16 @@ def _parse_command_token(token: str) -> PipelineCommand:
         if part.startswith("--"):
             raw_args.append(part)
             # Check if next token is a flag value (doesn't start with --)
-            if i + 2 < len(parts) and not parts[i + 2].startswith("--"):
-                raw_args.append(parts[i + 2])
-                skip_next = True
+            if i + 2 < len(parts):
+                next_tok = parts[i + 2]
+                if not next_tok.startswith("--"):
+                    # Quoted string consumed as flag value — don't add to raw_args,
+                    # handle in extraction loop directly
+                    if next_tok.startswith('"') or next_tok.startswith("'"):
+                        skip_next = True
+                    else:
+                        raw_args.append(next_tok)
+                        skip_next = True
             continue
         # Non-flag token
         if not subcommand:
@@ -138,9 +145,16 @@ def _parse_command_token(token: str) -> PipelineCommand:
             if "=" in key:
                 k, v = key.split("=", 1)
                 args[k] = v
-            elif i + 1 < len(raw_args) and not raw_args[i + 1].startswith("--"):
-                args[key] = raw_args[i + 1]
-                i += 1
+            elif i + 1 < len(raw_args):
+                next_arg = raw_args[i + 1]
+                if next_arg.startswith('"') or next_arg.startswith("'"):
+                    args[key] = next_arg
+                    i += 1
+                elif not next_arg.startswith("--"):
+                    args[key] = next_arg
+                    i += 1
+                else:
+                    args[key] = True
             else:
                 args[key] = True
         i += 1
