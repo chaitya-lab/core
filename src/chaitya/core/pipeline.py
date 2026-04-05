@@ -422,10 +422,11 @@ class PipelineOrchestrator:
 
             handler = self._handlers.get(cmd.adapter)
             if handler is None:
+                available = ", ".join(sorted(self._handlers)) if self._handlers else "(none)"
                 err_msg = (
-                    f"No handler registered for adapter {cmd.adapter!r}. "
-                    f"Available adapters: {', '.join(sorted(self._handlers)) or '(none)'}. "
-                    f"Use 'info' to discover adapters."
+                    f"[error] unknown adapter: {cmd.adapter}\n"
+                    f"Available: {available}\n"
+                    f"Try: chaitya info\n"
                 ).encode()
                 accumulated_stderr.extend(err_msg)
                 last_exit_code = 127
@@ -513,10 +514,11 @@ class PipelineOrchestrator:
 
             handler = self._handlers.get(cmd.adapter)
             if handler is None:
+                available = ", ".join(sorted(self._handlers)) if self._handlers else "(none)"
                 err_msg = (
-                    f"No handler registered for adapter {cmd.adapter!r}. "
-                    f"Available adapters: {', '.join(sorted(self._handlers)) or '(none)'}. "
-                    f"Use 'info' to discover adapters."
+                    f"[error] unknown adapter: {cmd.adapter}\n"
+                    f"Available: {available}\n"
+                    f"Try: chaitya info\n"
                 ).encode()
                 accumulated_stderr.extend(err_msg)
                 last_exit_code = 127

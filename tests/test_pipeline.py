@@ -330,7 +330,7 @@ class TestPipelineExecution:
         # Should have error stderr chunk + final
         stderr_chunks = [c for c in chunks if c.is_stderr]
         assert len(stderr_chunks) >= 1
-        assert b"No handler registered" in stderr_chunks[0].data
+        assert b"[error] unknown adapter" in stderr_chunks[0].data
 
     async def test_handler_exception_caught(self) -> None:
         orch = self._make_orchestrator()
