@@ -1,0 +1,16 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "chaitya-adapter-browser2"
+version = "0.1.0a1"
+description = "Daemon-based browser automation via Playwright — CLI adapter that talks to a persistent daemon via event bus."
+requires-python = ">=3.11"
+dependencies = ["playwright>=1.40.0"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/chaitya_adapter_browser2"]
+
+[project.entry-points."chaitya.adapters"]
+browser2 = "chaitya_adapter_browser2"
