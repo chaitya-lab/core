@@ -396,3 +396,211 @@ class TestGitAdapter:
         result = asyncio.run(mod._git.passthrough(ctx))
         assert result[1] == 1
         assert b"blocked" in result[0]
+
+
+# ---------------------------------------------------------------------------
+# Route adapter — conditional pipeline routing
+# ---------------------------------------------------------------------------
+
+
+def _load_route_adapter():
+    """Load the route adapter module directly from the workspace path."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "route_adapter",
+        "adaptors/core/route/src/chaitya_adapter_route/__init__.py",
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class TestRouteAdapter:
+    def test_loads_successfully(self):
+        mod = _load_route_adapter()
+        assert hasattr(mod, "route_handler")
+        assert hasattr(mod, "__adapter_contract__")
+
+    def test_contract_has_check_command(self):
+        mod = _load_route_adapter()
+        contract = mod.__adapter_contract__
+        assert contract["name"] == "route"
+        cmd_names = [c["name"] for c in contract["commands"]]
+        assert "check" in cmd_names
+
+    def test_passes_through_when_no_conditions(self):
+        mod = _load_route_adapter()
+        ctx = SessionContext(args={"subcommand": "check"})
+        stream = ChaityaStream(content=b"hello world")
+        result = asyncio.run(mod.route_handler(stream, ctx))
+        assert result[0] == b"hello world"
+        assert result[1] == 0
+
+    def test_if_exit_zero_passes_on_zero(self):
+        mod = _load_route_adapter()
+        ctx = SessionContext(args={"subcommand": "check", "if-exit": "0", "exit_code": "0"})
+        stream = ChaityaStream(content=b"ok")
+        result = asyncio.run(mod.route_handler(stream, ctx))
+        assert result[0] == b"ok"
+        assert result[1] == 0
+
+    def test_if_exit_zero_drops_on_nonzero(self):
+        mod = _load_route_adapter()
+        ctx = SessionContext(args={"subcommand": "check", "if-exit": "0", "exit_code": "1"})
+        stream = ChaityaStream(content=b"error")
+        result = asyncio.run(mod.route_handler(stream, ctx))
+        assert result[1] == 0
+        assert b"dropped" in result[0]
+
+    def test_if_exit_nonzero_passes_on_nonzero(self):
+        mod = _load_route_adapter()
+        ctx = SessionContext(
+            args={"subcommand": "check", "if-exit-nonzero": True, "exit_code": "1"}
+        )
+        stream = ChaityaStream(content=b"error")
+        result = asyncio.run(mod.route_handler(stream, ctx))
+        assert result[0] == b"error"
+        assert result[1] == 0
+
+    def test_if_pattern_passes_on_match(self):
+        mod = _load_route_adapter()
+        ctx = SessionContext(args={"subcommand": "check", "if-pattern": "ERROR"})
+        stream = ChaityaStream(content=b"ERROR: something failed")
+        result = asyncio.run(mod.route_handler(stream, ctx))
+        assert result[0] == b"ERROR: something failed"
+
+    def test_if_pattern_drops_on_no_match(self):
+        mod = _load_route_adapter()
+        ctx = SessionContext(args={"subcommand": "check", "if-pattern": "ERROR"})
+        stream = ChaityaStream(content=b"all good here")
+        result = asyncio.run(mod.route_handler(stream, ctx))
+        assert b"dropped" in result[0]
+
+    def test_unless_pattern_passes_on_no_match(self):
+        mod = _load_route_adapter()
+        ctx = SessionContext(args={"subcommand": "check", "unless-pattern": "DEBUG"})
+        stream = ChaityaStream(content=b"INFO: everything fine")
+        result = asyncio.run(mod.route_handler(stream, ctx))
+        assert result[0] == b"INFO: everything fine"
+
+    def test_unless_pattern_drops_on_match(self):
+        mod = _load_route_adapter()
+        ctx = SessionContext(args={"subcommand": "check", "unless-pattern": "DEBUG"})
+        stream = ChaityaStream(content=b"DEBUG: verbose output")
+        result = asyncio.run(mod.route_handler(stream, ctx))
+        assert b"dropped" in result[0]
+
+    def test_inverse_flips_pass_to_drop(self):
+        mod = _load_route_adapter()
+        ctx = SessionContext(
+            args={"subcommand": "check", "if-exit": "0", "inverse": True, "exit_code": "0"}
+        )
+        stream = ChaityaStream(content=b"error")
+        result = asyncio.run(mod.route_handler(stream, ctx))
+        assert b"dropped" in result[0]
+
+    def test_unknown_subcommand_returns_error(self):
+        mod = _load_route_adapter()
+        ctx = SessionContext(args={"subcommand": "unknown"})
+        stream = ChaityaStream(content=b"", exit_code=0)
+        result = asyncio.run(mod.route_handler(stream, ctx))
+        assert result[1] == 127
+        assert b"unknown subcommand" in result[0]
+
+
+# ---------------------------------------------------------------------------
+# Process adapter — system process management
+# ---------------------------------------------------------------------------
+
+
+def _load_process_adapter():
+    """Load the process adapter module directly from the workspace path."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "process_adapter",
+        "adaptors/core/process/src/chaitya_adapter_process/__init__.py",
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class TestProcessAdapter:
+    def test_loads_successfully(self):
+        mod = _load_process_adapter()
+        assert hasattr(mod, "process_handler")
+        assert hasattr(mod, "__adapter_contract__")
+
+    def test_contract_has_expected_commands(self):
+        mod = _load_process_adapter()
+        contract = mod.__adapter_contract__
+        assert contract["name"] == "process"
+        cmd_names = [c["name"] for c in contract["commands"]]
+        for name in ["list", "tree", "info", "signal", "kill"]:
+            assert name in cmd_names, f"Missing command: {name}"
+
+    def test_list_returns_output(self):
+        mod = _load_process_adapter()
+        ctx = SessionContext(args={"subcommand": "list"})
+        stream = ChaityaStream(content=b"", exit_code=0)
+        result = asyncio.run(mod.process_handler(stream, ctx))
+        assert result[1] == 0
+        assert len(result[0]) > 0
+
+    def test_info_requires_pid(self):
+        mod = _load_process_adapter()
+        ctx = SessionContext(args={"subcommand": "info"})
+        stream = ChaityaStream(content=b"", exit_code=0)
+        result = asyncio.run(mod.process_handler(stream, ctx))
+        assert result[1] == 1
+        assert b"--pid" in result[0]
+
+    def test_info_unknown_pid_returns_error(self):
+        mod = _load_process_adapter()
+        ctx = SessionContext(args={"subcommand": "info", "pid": "999999999"})
+        stream = ChaityaStream(content=b"", exit_code=0)
+        result = asyncio.run(mod.process_handler(stream, ctx))
+        assert result[1] == 1
+        assert b"no such process" in result[0]
+
+    def test_signal_unknown_pid_returns_error(self):
+        mod = _load_process_adapter()
+        ctx = SessionContext(args={"subcommand": "signal", "pid": "999999999", "sig": "TERM"})
+        stream = ChaityaStream(content=b"", exit_code=0)
+        result = asyncio.run(mod.process_handler(stream, ctx))
+        assert result[1] == 1
+
+    def test_kill_unknown_pid_returns_error(self):
+        mod = _load_process_adapter()
+        ctx = SessionContext(args={"subcommand": "kill", "pid": "999999999"})
+        stream = ChaityaStream(content=b"", exit_code=0)
+        result = asyncio.run(mod.process_handler(stream, ctx))
+        assert result[1] == 1
+
+    def test_signal_unknown_signal_returns_error(self):
+        mod = _load_process_adapter()
+        ctx = SessionContext(args={"subcommand": "signal", "pid": "1", "sig": "NOTAREALSIGNAL"})
+        stream = ChaityaStream(content=b"", exit_code=0)
+        result = asyncio.run(mod.process_handler(stream, ctx))
+        assert result[1] == 1
+        assert b"unknown signal" in result[0]
+
+    def test_unknown_subcommand_returns_error(self):
+        mod = _load_process_adapter()
+        ctx = SessionContext(args={"subcommand": "unknown"})
+        stream = ChaityaStream(content=b"", exit_code=0)
+        result = asyncio.run(mod.process_handler(stream, ctx))
+        assert result[1] == 127
+        assert b"unknown subcommand" in result[0]
+
+    def test_help_without_subcommand(self):
+        mod = _load_process_adapter()
+        ctx = SessionContext(args={})
+        stream = ChaityaStream(content=b"", exit_code=0)
+        result = asyncio.run(mod.process_handler(stream, ctx))
+        assert result[1] == 0
+        assert b"process" in result[0]

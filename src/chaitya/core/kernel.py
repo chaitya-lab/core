@@ -604,6 +604,7 @@ class Kernel:
             source=input_stream.source,
             size_bytes=input_stream.size_bytes,
             encoding=input_stream.encoding,
+            exit_code=getattr(input_stream, "exit_code", 0),
         )
         sdk_args = args or {
             "subcommand": ctx.env.get("__subcommand__", ""),

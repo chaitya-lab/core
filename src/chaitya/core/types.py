@@ -95,7 +95,6 @@ class PipelineOperator(enum.Enum):
 # ---------------------------------------------------------------------------
 
 
-
 # Kernel-emitted event types (PRD §6)
 KERNEL_STARTED = "kernel_started"
 KERNEL_SHUTTING_DOWN = "kernel_shutting_down"
@@ -123,7 +122,6 @@ CRON_TRIGGERED = "cron_triggered"
 ERROR = "error"
 
 
-
 @dataclass(frozen=True)
 class Event:
     """Kernel event — the universal message on the event bus.
@@ -134,9 +132,7 @@ class Event:
     event_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     type: str = ""
     source_adapter: str = ""
-    timestamp: str = field(
-        default_factory=lambda: datetime.now(UTC).isoformat()
-    )
+    timestamp: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
     session_id: str | None = None
     exit_code: int | None = None
     duration_ms: int | None = None
@@ -190,7 +186,6 @@ class SessionHandle:
     """Backend-specific identifier (e.g., tmux session:window.pane)."""
 
 
-
 @dataclass
 class SessionRecord:
     """Persistent session record stored in the database."""
@@ -200,12 +195,8 @@ class SessionRecord:
     template: str | None = None
     identity: SessionIdentity = field(default_factory=SessionIdentity)
     metadata: dict[str, Any] = field(default_factory=dict)
-    created_at: str = field(
-        default_factory=lambda: datetime.now(UTC).isoformat()
-    )
-    last_activity: str = field(
-        default_factory=lambda: datetime.now(UTC).isoformat()
-    )
+    created_at: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
+    last_activity: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
 
 
 # ---------------------------------------------------------------------------
@@ -244,6 +235,7 @@ class ChaityaStream:
     source: str = ""
     size_bytes: int = 0
     encoding: str = "utf-8"
+    exit_code: int = 0
 
 
 @dataclass
@@ -272,9 +264,7 @@ class CommandChain:
     Represents: cmd1 | cmd2 && cmd3 || cmd4 ; cmd5
     """
 
-    steps: list[tuple[PipelineCommand, PipelineOperator | None]] = field(
-        default_factory=list
-    )
+    steps: list[tuple[PipelineCommand, PipelineOperator | None]] = field(default_factory=list)
     """List of (command, operator_to_next). Last operator is None."""
 
 
@@ -511,6 +501,4 @@ class CommandOutput:
     type: str = "text/plain"
     stderr: str = ""
     session_id: str | None = None
-    timestamp: str = field(
-        default_factory=lambda: datetime.now(UTC).isoformat()
-    )
+    timestamp: str = field(default_factory=lambda: datetime.now(UTC).isoformat())

@@ -84,6 +84,7 @@ class ChaityaStream:
     source: str = ""
     size_bytes: int = 0
     encoding: str = "utf-8"
+    exit_code: int = 0
 
 
 @dataclass

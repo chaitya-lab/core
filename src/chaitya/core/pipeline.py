@@ -483,6 +483,7 @@ class PipelineOrchestrator:
             step_ctx.env["__adapter__"] = cmd.adapter
             step_ctx.env["__subcommand__"] = cmd.subcommand
             step_ctx.env["__args__"] = list(cmd.raw_args)
+            step_ctx.env["exit_code"] = str(last_exit_code)
             step_ctx.env.update(cmd.args)
 
             try:
@@ -510,6 +511,7 @@ class PipelineOrchestrator:
                     content=output_bytes,
                     declared_type="application/octet-stream",
                     size_bytes=len(output_bytes),
+                    exit_code=last_exit_code,
                 )
             elif operator in (PipelineOperator.SEQUENCE, PipelineOperator.OR):
                 current_input = ctx.input_stream or ChaityaStream()
@@ -577,6 +579,7 @@ class PipelineOrchestrator:
             step_ctx.env["__adapter__"] = cmd.adapter
             step_ctx.env["__subcommand__"] = cmd.subcommand
             step_ctx.env["__args__"] = list(cmd.raw_args)
+            step_ctx.env["exit_code"] = str(last_exit_code)
             step_ctx.env.update(cmd.args)
 
             try:
@@ -606,6 +609,7 @@ class PipelineOrchestrator:
                     content=output_bytes,
                     declared_type="application/octet-stream",
                     size_bytes=len(output_bytes),
+                    exit_code=last_exit_code,
                 )
             elif operator in (PipelineOperator.SEQUENCE, PipelineOperator.OR):
                 current_input = ctx.input_stream or ChaityaStream()
