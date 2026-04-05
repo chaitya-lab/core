@@ -45,19 +45,20 @@ class SqliteStore:
         *,
         max_events_per_second: int = 1000,
         max_log_size_bytes: int = 1_073_741_824,  # 1 GB
+        event_bus: SqliteEventBus | None = None,
     ) -> None:
         self._db_path = str(db_path)
         self._max_log_size = max_log_size_bytes
         self._db: aiosqlite.Connection | None = None
-        # Event bus shares the same database
-        self._event_bus = SqliteEventBus(
+        # Use provided event bus, or create one sharing this database
+        self._event_bus = event_bus or SqliteEventBus(
             db_path=db_path,
             max_events_per_second=max_events_per_second,
         )
 
     @property
     def event_bus(self) -> SqliteEventBus:
-        """Access the event bus (shares the same database)."""
+        """Access the event bus (may share the same database)."""
         return self._event_bus
 
     # ------------------------------------------------------------------

@@ -51,7 +51,7 @@ from chaitya_sdk.types import (
 from chaitya.core import __version__
 from chaitya.core.backends.local import LocalProcessBackend
 from chaitya.core.backends.tmux import TmuxSessionBackend
-from chaitya.core.config import CoreConfig
+from chaitya.core.config import CoreConfig, EventBusConfig
 from chaitya.core.event_bus import SqliteEventBus
 from chaitya.core.pipeline import AdapterHandler, PipelineOrchestrator
 from chaitya.core.registry import AdapterRegistry
@@ -168,6 +168,7 @@ class Kernel:
         max_log_size_bytes: int = 1_073_741_824,
         templates_dir: str | None = None,
         input_timeout_seconds: int = 300,
+        event_bus: SqliteEventBus | None = None,
     ) -> None:
         self._config = config
         self.cli_name = cli_name
@@ -180,12 +181,17 @@ class Kernel:
         self._input_timeout_task: asyncio.Task[None] | None = None
 
         # --- Subsystem composition ---
+        # Use provided event bus, or build one from config (default: SqliteEventBus)
+        self._event_bus: SqliteEventBus = event_bus or SqliteEventBus(
+            db_path=db_path,
+            max_events_per_second=max_events_per_second,
+        )
         self._store = SqliteStore(
             db_path=db_path,
             max_events_per_second=max_events_per_second,
             max_log_size_bytes=max_log_size_bytes,
+            event_bus=self._event_bus,
         )
-        self._event_bus: SqliteEventBus = self._store.event_bus
         self._adapter_bus = _AdapterEventBusBridge(self._event_bus)
         self._backend = self._build_session_backend(session_backend)
         self._session_mgr = SessionManager(
@@ -206,6 +212,11 @@ class Kernel:
     @classmethod
     def from_config(cls, config: CoreConfig) -> Kernel:
         """Create a Kernel from a CoreConfig object."""
+        event_bus = cls._build_event_bus(
+            config.event_bus,
+            config.store.path or ":memory:",
+            config.store.max_events_per_second,
+        )
         return cls(
             config=config,
             db_path=config.store.path or ":memory:",
@@ -223,6 +234,7 @@ class Kernel:
             max_events_per_second=config.store.max_events_per_second,
             max_log_size_bytes=config.store.max_log_size_bytes,
             templates_dir=config.templates_dir or None,
+            event_bus=event_bus,
         )
 
     @staticmethod
@@ -238,6 +250,41 @@ class Kernel:
             return PsmuxBackend()
         raise ValueError(
             f"Unsupported session backend {session_backend!r}. Supported backends: local, tmux, psmux."
+        )
+
+    @staticmethod
+    def _build_event_bus(
+        config: EventBusConfig,
+        db_path: str,
+        max_events_per_second: int,
+    ) -> SqliteEventBus:
+        """Build an EventBus implementation from config.
+
+        Currently supports 'sqlite' (default). Other backends can be added
+        by extending this factory. The returned bus can be shared between
+        the store and the kernel.
+
+        Reference: PRD §3.4, §12 — event bus is a swappable extension point.
+        """
+        backend = config.backend.strip().lower()
+        if backend == "sqlite":
+            return SqliteEventBus(
+                db_path=db_path,
+                max_events_per_second=max_events_per_second,
+            )
+        if backend == "redis":
+            raise NotImplementedError(
+                "Redis event bus: implement and register via "
+                "chaitya.core.protocols.EventBusProtocol"
+            )
+        if backend == "memory":
+            raise NotImplementedError(
+                "In-memory event bus: implement and register via "
+                "chaitya.core.protocols.EventBusProtocol"
+            )
+        raise ValueError(
+            f"Unsupported event bus backend {config.backend!r}. "
+            f"Supported: sqlite. Others: implement EventBusProtocol."
         )
 
     # -- Public properties --
