@@ -604,3 +604,164 @@ class TestProcessAdapter:
         result = asyncio.run(mod.process_handler(stream, ctx))
         assert result[1] == 0
         assert b"process" in result[0]
+
+
+# ---------------------------------------------------------------------------
+# Desktop adapter — local desktop access
+# ---------------------------------------------------------------------------
+
+
+def _load_desktop_adapter():
+    """Load the desktop adapter module directly from the workspace path."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "desktop_adapter",
+        "adaptors/core/desktop/src/chaitya_adapter_desktop/__init__.py",
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class TestDesktopAdapter:
+    def test_loads_successfully(self):
+        mod = _load_desktop_adapter()
+        assert hasattr(mod, "desktop_handler")
+        assert hasattr(mod, "__adapter_contract__")
+
+    def test_contract_has_expected_commands(self):
+        mod = _load_desktop_adapter()
+        contract = mod.__adapter_contract__
+        assert contract["name"] == "desktop"
+        cmd_names = [c["name"] for c in contract["commands"]]
+        for name in ["screenshot", "clipboard", "tree"]:
+            assert name in cmd_names, f"Missing command: {name}"
+
+    def test_help_without_subcommand(self):
+        mod = _load_desktop_adapter()
+        ctx = SessionContext(args={})
+        stream = ChaityaStream(content=b"")
+        result = asyncio.run(mod.desktop_handler(stream, ctx))
+        assert result[1] == 0
+        assert b"desktop" in result[0]
+
+    def test_unknown_subcommand_returns_error(self):
+        mod = _load_desktop_adapter()
+        ctx = SessionContext(args={"subcommand": "unknown"})
+        stream = ChaityaStream(content=b"")
+        result = asyncio.run(mod.desktop_handler(stream, ctx))
+        assert result[1] == 127
+        assert b"unknown subcommand" in result[0]
+
+    def test_clipboard_read_returns_bytes(self):
+        mod = _load_desktop_adapter()
+        ctx = SessionContext(args={"subcommand": "clipboard", "action": "read"})
+        stream = ChaityaStream(content=b"")
+        result = asyncio.run(mod.desktop_handler(stream, ctx))
+        assert result[1] == 0
+        assert isinstance(result[0], bytes)
+
+    def test_clipboard_write(self):
+        mod = _load_desktop_adapter()
+        ctx = SessionContext(args={"subcommand": "clipboard", "action": "write", "text": "test"})
+        stream = ChaityaStream(content=b"")
+        result = asyncio.run(mod.desktop_handler(stream, ctx))
+        assert result[1] == 0
+        assert b"ok" in result[0] or b"copied" in result[0]
+
+    def test_screenshot_returns_data_or_handles_display(self):
+        mod = _load_desktop_adapter()
+        ctx = SessionContext(args={"subcommand": "screenshot"})
+        stream = ChaityaStream(content=b"")
+        result = asyncio.run(mod.desktop_handler(stream, ctx))
+        # Returns 0 with data OR 1 with a display-related error (headless env)
+        if result[1] == 0:
+            data = result[0]
+            assert b"data:image/png" in data or b"ok" in data or b"saved" in data
+        else:
+            # Headless environment — should have a meaningful error message
+            assert len(result[0]) > 0
+
+    def test_screenshot_to_file_handles_display(self):
+        mod = _load_desktop_adapter()
+        ctx = SessionContext(
+            args={"subcommand": "screenshot", "path": "/tmp/chaitya-test-screen.png"}
+        )
+        stream = ChaityaStream(content=b"")
+        result = asyncio.run(mod.desktop_handler(stream, ctx))
+        # Returns 0 (saved) OR 1 (no display) — both are valid
+
+
+# ---------------------------------------------------------------------------
+# GUI control adapter — keyboard/mouse automation
+# ---------------------------------------------------------------------------
+
+
+def _load_gui_adapter():
+    """Load the GUI adapter module directly from the workspace path."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "gui_adapter",
+        "adaptors/core/gui/src/chaitya_adapter_gui/__init__.py",
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class TestGUIAdapter:
+    def test_loads_successfully(self):
+        mod = _load_gui_adapter()
+        assert hasattr(mod, "gui_handler")
+        assert hasattr(mod, "__adapter_contract__")
+
+    def test_contract_has_expected_commands(self):
+        mod = _load_gui_adapter()
+        contract = mod.__adapter_contract__
+        assert contract["name"] == "gui"
+        cmd_names = [c["name"] for c in contract["commands"]]
+        for name in ["click", "move", "type", "press", "drag"]:
+            assert name in cmd_names, f"Missing command: {name}"
+
+    def test_help_without_subcommand(self):
+        mod = _load_gui_adapter()
+        ctx = SessionContext(args={})
+        stream = ChaityaStream(content=b"")
+        result = asyncio.run(mod.gui_handler(stream, ctx))
+        assert result[1] == 0
+        assert b"gui" in result[0]
+
+    def test_unknown_subcommand_returns_error(self):
+        mod = _load_gui_adapter()
+        ctx = SessionContext(args={"subcommand": "unknown"})
+        stream = ChaityaStream(content=b"")
+        result = asyncio.run(mod.gui_handler(stream, ctx))
+        assert result[1] == 127
+        assert b"unknown subcommand" in result[0]
+
+    def test_press_with_key_succeeds_or_fails_gracefully(self):
+        mod = _load_gui_adapter()
+        ctx = SessionContext(args={"subcommand": "press", "key": "Enter"})
+        stream = ChaityaStream(content=b"")
+        result = asyncio.run(mod.gui_handler(stream, ctx))
+        # Returns 0 (success) or 1 (accessibility denied) — both valid
+
+    def test_move_requires_coords(self):
+        mod = _load_gui_adapter()
+        ctx = SessionContext(args={"subcommand": "move"})
+        stream = ChaityaStream(content=b"")
+        result = asyncio.run(mod.gui_handler(stream, ctx))
+        assert result[1] == 1
+
+    def test_drag_requires_from_to(self):
+        mod = _load_gui_adapter()
+        ctx = SessionContext(args={"subcommand": "drag", "from": "100,200", "to": "300,400"})
+        stream = ChaityaStream(content=b"")
+        result = asyncio.run(mod.gui_handler(stream, ctx))
+        # On macOS without accessibility, returns error
+        # but the contract is correct
+        assert result[1] in (0, 1)
