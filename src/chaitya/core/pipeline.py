@@ -297,13 +297,27 @@ def apply_l2(
     4. Stderr attachment: non-zero exit + stderr → append [stderr]
     5. Metadata footer: [exit:{code} | {duration}ms] as last line (PRD §4)
     """
-    # Binary guard
-    if _NULL_BYTE in raw_output:
+    # Binary guard — use output_type hint first, null byte detection as fallback
+    is_binary_type = (
+        output_type.startswith("image/")
+        or output_type.startswith("audio/")
+        or output_type.startswith("video/")
+        or output_type
+        in (
+            "application/octet-stream",
+            "application/pdf",
+            "application/zip",
+            "application/gzip",
+        )
+    )
+    if is_binary_type or _NULL_BYTE in raw_output:
+        hint = f"[{output_type}] " if is_binary_type else ""
         return CommandOutput(
             raw="[binary content]",
             processed=(
-                "[binary content detected — cannot display inline]\n"
-                "Redirect to file: <command> > output.bin"
+                f"[error] {hint}binary data ({len(raw_output):,} bytes). "
+                f"LLMs cannot read binary. Use: chaitya file read --path <file>\n"
+                f"[exit:{exit_code} | {duration_ms}ms]"
             ),
             exit_code=exit_code,
             duration_ms=duration_ms,
@@ -384,14 +398,40 @@ class PipelineOrchestrator:
         self,
         *,
         overflow_dir: str | None = None,
+        registry: Any = None,
     ) -> None:
         self._handlers: dict[str, AdapterHandler] = {}
         self._overflow_dir = overflow_dir
+        self._registry = registry
 
     def register_handler(self, adapter: str, handler: AdapterHandler) -> None:
         """Register an adapter command handler for pipeline dispatch."""
         self._handlers[adapter] = handler
         logger.debug("Registered pipeline handler for adapter %r", adapter)
+
+    def _get_output_type(self, chain: CommandChain) -> str:
+        """Look up the output type from the first command's contract.
+
+        Checks per-command output_type first, falls back to adapter
+        default_output_type, then 'text/plain'.
+        """
+        if not chain.steps:
+            return "text/plain"
+        cmd, _ = chain.steps[0]
+        if self._registry is None:
+            return "text/plain"
+        pkg = self._registry.get_adapter(cmd.adapter)
+        if pkg is None or pkg.contract is None:
+            return "text/plain"
+        contract = pkg.contract
+        subcommand = cmd.subcommand
+        if subcommand:
+            for cmd_spec in getattr(contract, "commands", []):
+                if cmd_spec.name == subcommand:
+                    ot = getattr(cmd_spec, "output_type", None)
+                    if ot:
+                        return ot
+        return getattr(contract, "default_output_type", "text/plain")
 
     def unregister_handler(self, adapter: str) -> None:
         """Remove an adapter handler."""
@@ -482,6 +522,7 @@ class PipelineOrchestrator:
             session_id=ctx.session_id,
             duration_ms=duration_ms,
             overflow_dir=self._overflow_dir,
+            output_type=self._get_output_type(chain),
         )
 
     async def execute(
@@ -577,6 +618,7 @@ class PipelineOrchestrator:
             session_id=ctx.session_id,
             duration_ms=duration_ms,
             overflow_dir=self._overflow_dir,
+            output_type=self._get_output_type(chain),
         )
 
         yield OutputChunk(

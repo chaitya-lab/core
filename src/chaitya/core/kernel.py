@@ -201,6 +201,7 @@ class Kernel:
             enabled_adapters=enabled_adapters or [],
             disabled_adapters=disabled_adapters or [],
         )
+        self._pipeline._registry = self._registry  # type: ignore[attr-defined]
 
     @classmethod
     def from_config(cls, config: CoreConfig) -> Kernel:

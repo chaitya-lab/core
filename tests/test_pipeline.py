@@ -186,8 +186,13 @@ class TestL2Presentation:
 
     def test_binary_guard(self) -> None:
         result = apply_l2(b"hello\x00world", b"", exit_code=0)
-        assert "binary content" in result.processed
-        assert "output.bin" in result.processed
+        assert "binary" in result.processed
+        assert "[exit:0 |" in result.processed
+
+    def test_binary_guard_with_type_hint(self) -> None:
+        result = apply_l2(b"\x89PNG\r\n\x1a\n", b"", exit_code=0, output_type="image/png")
+        assert "image/png" in result.processed
+        assert "binary" in result.processed
 
     def test_ansi_stripped(self) -> None:
         result = apply_l2(b"\x1b[31mred\x1b[0m text", b"", exit_code=0)
