@@ -23,6 +23,7 @@ __version__ = "0.1.0a1"
 
 from chaitya_sdk.context import event_bus, registry_proxy  # noqa: F401
 from chaitya_sdk.decorator import adapter, get_registered_adapters  # noqa: F401
+from chaitya_sdk.session import SessionRunner  # noqa: F401
 from chaitya_sdk.types import (  # noqa: F401
     # Event type constants
     ADAPTER_LOADED,
@@ -71,9 +72,9 @@ from chaitya_sdk.types import (  # noqa: F401
     Suspension,
 )
 from chaitya_sdk.wrappers import (  # noqa: F401
+    ActivityState,
     CLIWrapper,
     CommandResult,
-    ActivityState,
     detect_activity_from_output,
     format_exit_code_note,
     run_cli,
@@ -139,4 +140,6 @@ __all__ = [
     "run_cli",
     "shell_escape",
     "stream_cli",
+    # Session runner
+    "SessionRunner",
 ]

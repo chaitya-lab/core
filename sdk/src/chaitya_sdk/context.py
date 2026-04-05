@@ -9,9 +9,12 @@ This module also provides permission-checked wrappers.
 
 from __future__ import annotations
 
+import asyncio
 import logging
-from collections.abc import Callable
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 from chaitya_sdk.types import (
     AdapterPermissions,
@@ -112,10 +115,69 @@ class EventBusProxy:
         bus = self._require_bus()
         await bus.unsubscribe(subscription_id)
 
+    async def wait_for_response(
+        self,
+        request_id: str,
+        event_types: list[str],
+        timeout: float = 30.0,
+    ) -> Event:
+        """Wait for a response event with a matching request_id.
+
+        This is the key primitive for the daemon pattern (PRD §8).
+        The CLI adapter emits a request event and waits for the daemon's
+        response on the same event bus.
+
+        Usage::
+
+            request_id = str(uuid.uuid4())
+            await event_bus.emit(Event(
+                type="browser.screenshot_requested",
+                request_id=request_id,
+                payload={},
+            ))
+            response = await event_bus.wait_for_response(
+                request_id,
+                event_types=["browser.screenshot_response"],
+                timeout=30.0,
+            )
+            screenshot_bytes = response.payload["screenshot"]
+
+        Args:
+            request_id: The request_id from the emitted request event.
+            event_types: Event types to subscribe to (e.g. ["browser.screenshot_response"]).
+            timeout: Maximum seconds to wait. Raises TimeoutError on expiry.
+
+        Returns:
+            The matching Event with the response payload.
+
+        Raises:
+            TimeoutError: If no matching response arrives within timeout.
+            RuntimeError: If the event bus is not available.
+        """
+        bus = self._require_bus()
+        result: list[Event | None] = [None]
+        done = asyncio.Event()
+
+        async def handler(event: Event) -> None:
+            if result[0] is None and event.request_id == request_id:
+                result[0] = event
+                done.set()
+
+        sub = await bus.subscribe(handler, event_types=event_types, session_id=None)
+        try:
+            await asyncio.wait_for(done.wait(), timeout=timeout)
+            if result[0] is None:
+                raise TimeoutError(f"Timed out waiting for response to {request_id}")
+            return result[0]
+        except TimeoutError as exc:
+            raise TimeoutError(f"Timed out waiting for response to {request_id}") from exc
+        finally:
+            await bus.unsubscribe(sub)
+
 
 # Module-level singletons — adapters import these directly.
 event_bus = EventBusProxy()
-_registry_proxy: "RegistryProxy | None" = None
+_registry_proxy: RegistryProxy | None = None
 
 
 class RegistryProxy:
