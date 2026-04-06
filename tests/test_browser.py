@@ -17,6 +17,11 @@ from chaitya.core.kernel import Kernel
 from chaitya.core.types import EventFilter
 
 
+def _session_backend() -> str:
+    """Return appropriate session backend for the platform."""
+    return "psmux" if os.name == "nt" else "tmux"
+
+
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -24,7 +29,7 @@ from chaitya.core.types import EventFilter
 
 @pytest.fixture
 async def kernel():
-    k = Kernel(db_path=":memory:", session_backend="tmux")
+    k = Kernel(db_path=":memory:", session_backend=_session_backend())
     await k.boot()
     yield k
     try:
