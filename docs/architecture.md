@@ -38,44 +38,55 @@ Adaptors should import only from `chaitya_sdk`.
 
 ## Interactive Flows
 
-There are two different interaction paths:
+There are two interaction paths:
 
 ### Session Interaction
 
-This is PTY-style control over a running subprocess in a named session.
+PTY-style control over a running subprocess in a named session.
 
 Commands:
 
-- `session send-input`
-- `session output`
-- `session signal`
-- `session set-env`
-- `session unset-env`
+- `session send` — send text, newline, or key to session
+- `session output` — read session terminal output
+- `session signal` — send signals (SIGTERM, SIGINT, etc.)
+- `session set-env` / `session unset-env` — manage environment variables
 
-Use this for tools that already know how to prompt on stdin/stdout inside tmux.
+Use this for tools that prompt on stdin/stdout inside tmux.
 
 ### Adaptor Suspension
 
-This is kernel-managed logical input for adaptor handlers.
+Kernel-managed logical input for adaptor handlers.
 
 Flow:
 
-1. adaptor needs missing input
-2. adaptor suspends
-3. kernel emits `input_requested`
-4. user or client responds with `input respond <request_id> <value>`
-5. kernel emits `input_response`
-6. adaptor resumes with the injected value
+1. adaptor needs missing input → suspends
+2. kernel emits `input_requested`
+3. user responds with `input respond <request_id> <value>`
+4. kernel resumes adaptor with injected value
 
-Use this for structured approval and headless human-in-the-loop flows.
+## Streaming Pipeline
 
-## Stability Notes
+The pipeline supports async streaming handlers. `watch --live` streams events through the pipeline:
 
-The current kernel is a usable base for other projects.
+```bash
+chaitya watch --live --session my-session | \
+  chaitya route --if-pattern "ERROR" --do "session send alert --text 'Error!'"
+```
 
-Still intentionally evolving:
+`route --do` triggers actions when patterns match.
 
-- richer live watch streaming
-- stronger runtime permission enforcement
-- more first-party adaptors such as `process` and `route`
-- broader persistence and restart semantics for long-lived workflows
+## System Adaptors
+
+Core adapters shipped with the kernel:
+
+- `file` — read/write files
+- `shell` — run shell commands
+- `route` — filter content, trigger actions
+- `process` — system process management
+- `test` — testing utilities
+
+Community adapters:
+
+- `browser`, `browser2` — browser automation
+- `desktop` — screenshot, clipboard, accessibility tree
+- `gui` — mouse/keyboard control

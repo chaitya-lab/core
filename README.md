@@ -112,11 +112,11 @@ All swappable via `core.yaml`:
 
 | Protocol | Default | Purpose |
 |---|---|---|
-| `SessionBackend` | tmux (macOS/Linux), psmux (Windows), local fallback | Named session management |
+| `SessionBackend` | tmux (macOS/Linux), psmux (Windows) | Named session management |
 | `EventBus` | SQLite | Pub/sub event routing |
 | `Store` | SQLite | Session records + event log |
 | `PipelineOrchestrator` | Built-in | L0→L1→L2 data flow |
-| `AdapterLoader` | Entry points | Adapter discovery & loading |
+| `AdapterLoader` | Built-in | Adapter discovery & loading |
 
 ## Contributing
 
@@ -124,12 +124,22 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, coding standards, 
 
 ## Interactive Flow
 
-The kernel now supports two interactive patterns:
+The kernel supports two interactive patterns:
 
-- tmux-backed session control with `session send-input`, `session output`, `session signal`, `session set-env`, and `session unset-env`
+- tmux-backed session control with `session send`, `session output`, `session signal`, `session set-env`, and `session unset-env`
 - adaptor suspension/resume with `input list` and `input respond <request_id> <value>`
 
-That means a subsystem can pause for input, emit an `input_requested` event, and continue later from the main terminal or another client.
+## Streaming & Automation
+
+The pipeline supports async streaming handlers. `watch --live` streams events in real-time through the pipeline, enabling automation:
+
+```bash
+# Watch session events, route by pattern, trigger actions
+chaitya watch --live --session my-session | \
+  chaitya route --if-pattern "ERROR" --do "session send alert-session --text 'notify-send Error!'"
+```
+
+`route --do` emits a `route.action_requested` event when conditions match. The kernel dispatches the specified command asynchronously.
 
 ## License
 
