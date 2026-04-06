@@ -2,12 +2,18 @@
 
 from __future__ import annotations
 
+import os
 import textwrap
 from pathlib import Path
 
 from chaitya.core.config import CoreConfig, EventBusConfig, KernelConfig, SessionConfig, StoreConfig
 from chaitya.core.kernel import Kernel
 from chaitya.core.registry import AdapterRegistry
+
+
+def _session_backend() -> str:
+    """Return appropriate session backend for the platform."""
+    return "psmux" if os.name == "nt" else "tmux"
 
 
 def _write_custom_adaptor(base: Path, name: str = "asker") -> Path:
@@ -62,7 +68,7 @@ class TestCustomAdaptorPaths:
             kernel=KernelConfig(),
             store=StoreConfig(path=":memory:"),
             event_bus=EventBusConfig(),
-            session=SessionConfig(backend="tmux"),
+            session=SessionConfig(backend=_session_backend()),
             adapter_search_paths=[str(root)],
             system_adapters=["file", "shell"],
         )
@@ -93,7 +99,7 @@ class TestCustomAdaptorPaths:
             kernel=KernelConfig(),
             store=StoreConfig(path=str(db_path)),
             event_bus=EventBusConfig(),
-            session=SessionConfig(backend="tmux"),
+            session=SessionConfig(backend=_session_backend()),
             adapter_search_paths=[str(root)],
             system_adapters=["file", "shell"],
         )
