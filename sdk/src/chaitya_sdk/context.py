@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 
 if TYPE_CHECKING:
@@ -208,9 +209,7 @@ def check_fs_read(path: str) -> None:
         with open("/tmp/notes.txt") as f:
             content = f.read()
     """
-    from pathlib import Path
-
-    abs_path = str(Path(path).expanduser().resolve())
+    abs_path = Path(path).expanduser().resolve()
 
     if not _current_permissions.fs_read:
         raise PermissionDenied(
@@ -220,9 +219,12 @@ def check_fs_read(path: str) -> None:
         )
 
     for allowed in _current_permissions.fs_read:
-        allowed_path = str(Path(allowed).expanduser().resolve())
-        if abs_path == allowed_path or abs_path.startswith(allowed_path + "/"):
+        allowed_path = Path(allowed).expanduser().resolve()
+        try:
+            abs_path.relative_to(allowed_path)
             return
+        except ValueError:
+            continue
 
     raise PermissionDenied(
         _current_adapter_name,
@@ -248,9 +250,7 @@ def check_fs_write(path: str) -> None:
         with open("/tmp/output.txt", "w") as f:
             f.write(data)
     """
-    from pathlib import Path
-
-    abs_path = str(Path(path).expanduser().resolve())
+    abs_path = Path(path).expanduser().resolve()
 
     if not _current_permissions.fs_write:
         raise PermissionDenied(
@@ -260,9 +260,12 @@ def check_fs_write(path: str) -> None:
         )
 
     for allowed in _current_permissions.fs_write:
-        allowed_path = str(Path(allowed).expanduser().resolve())
-        if abs_path == allowed_path or abs_path.startswith(allowed_path + "/"):
+        allowed_path = Path(allowed).expanduser().resolve()
+        try:
+            abs_path.relative_to(allowed_path)
             return
+        except ValueError:
+            continue
 
     raise PermissionDenied(
         _current_adapter_name,

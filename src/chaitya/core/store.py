@@ -78,11 +78,13 @@ class SqliteStore:
                 template       TEXT,
                 identity_json  TEXT NOT NULL DEFAULT '{}',
                 metadata_json  TEXT NOT NULL DEFAULT '{}',
+                exec_mode      TEXT NOT NULL DEFAULT 'enabled',
                 created_at     TEXT NOT NULL,
                 last_activity  TEXT NOT NULL
             )
             """
         )
+        await self._ensure_exec_mode_column()
         await self._db.execute(
             """
             CREATE TABLE IF NOT EXISTS pending_inputs (
@@ -129,14 +131,15 @@ class SqliteStore:
         await self._db.execute(
             """
             INSERT INTO sessions
-                (name, state, template, identity_json, metadata_json,
+                (name, state, template, identity_json, metadata_json, exec_mode,
                  created_at, last_activity)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(name) DO UPDATE SET
                 state = excluded.state,
                 template = excluded.template,
                 identity_json = excluded.identity_json,
                 metadata_json = excluded.metadata_json,
+                exec_mode = excluded.exec_mode,
                 last_activity = excluded.last_activity
             """,
             (
@@ -145,6 +148,7 @@ class SqliteStore:
                 record.template,
                 identity_json,
                 metadata_json,
+                record.exec_mode,
                 record.created_at,
                 record.last_activity,
             ),
@@ -344,6 +348,20 @@ class SqliteStore:
                 browser_profile=identity_data.get("browser_profile"),
             ),
             metadata=metadata,
-            created_at=row[5],
-            last_activity=row[6],
+            exec_mode=row[5] or "enabled",
+            created_at=row[6],
+            last_activity=row[7],
         )
+
+    async def _ensure_exec_mode_column(self) -> None:
+        """Backfill the sessions.exec_mode column for pre-existing databases."""
+        if self._db is None:
+            raise RuntimeError("Store not open")
+        async with self._db.execute("PRAGMA table_info(sessions)") as cursor:
+            columns = [row[1] async for row in cursor]
+        if "exec_mode" in columns:
+            return
+        await self._db.execute(
+            "ALTER TABLE sessions ADD COLUMN exec_mode TEXT NOT NULL DEFAULT 'enabled'"
+        )
+        await self._db.commit()

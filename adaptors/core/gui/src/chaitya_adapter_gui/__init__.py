@@ -242,6 +242,15 @@ async def gui_handler(
     if not sub:
         return _GUI_HELP.encode(), 0
 
+    valid_subcommands = {"click", "move", "type", "press", "drag", "keydown", "keyup"}
+    if sub not in valid_subcommands:
+        return (
+            f"[error] gui: unknown subcommand: {sub}\n"
+            f"Available: click, move, type, press, drag, keydown, keyup\n"
+            f"Try: chaitya gui --help\n".encode(),
+            127,
+        )
+
     if _PLATFORM != "Darwin":
         return (
             f"[error] gui: only macOS is supported right now (platform: {_PLATFORM})\n".encode(),
@@ -362,12 +371,7 @@ end tell
     if sub == "keyup":
         return b"[ok] keyup: keys auto-release after press on macOS\n", 0
 
-    return (
-        f"[error] gui: unknown subcommand: {sub}\n"
-        f"Available: click, move, type, press, drag, keydown, keyup\n"
-        f"Try: chaitya gui --help\n".encode(),
-        127,
-    )
+    return b"[error] gui: unhandled command path\n", 1
 
 
 __chaitya_handler__ = gui_handler

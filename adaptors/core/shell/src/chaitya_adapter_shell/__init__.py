@@ -20,7 +20,8 @@ with adapter-level piping:
 from __future__ import annotations
 
 import asyncio
-import re
+import os
+import shutil
 from dataclasses import asdict
 
 from chaitya_sdk import ChaityaStream, SessionContext, adapter
@@ -46,7 +47,7 @@ _SHELL_RUN_HELP = """chaitya shell run — Execute a shell command.
 Usage:
   chaitya shell run --command "<shell-command>"
 
-The command runs in /bin/sh with full shell semantics.
+The command runs in the platform shell with full shell semantics.
 Stdin from the pipeline is passed to the command.
 """
 
@@ -59,6 +60,15 @@ _INTERACTIVE_WARN = {
     "less": "--quit-at-eof",
     "more": "--quit-at-eof",
 }
+
+
+def _build_shell_command(command: str) -> tuple[list[str], str]:
+    """Return the platform shell argv and label used to execute a command."""
+    if os.name == "nt":
+        shell = shutil.which("pwsh") or shutil.which("powershell") or "powershell"
+        return [shell, "-NoLogo", "-NoProfile", "-Command", command], "PowerShell"
+    shell = os.environ.get("SHELL", "/bin/sh")
+    return [shell, "-lc", command], shell
 
 
 @adapter(
@@ -129,13 +139,16 @@ async def shell_handler(
                 1,
             )
 
-    # Run the command via subprocess — shell semantics (pipes work)
-    proc = await asyncio.create_subprocess_shell(
-        command_str,
+    shell_argv, _shell_label = _build_shell_command(command_str)
+
+    # Run the command via the platform shell so adapters behave consistently
+    # across macOS/Linux and Windows.
+    proc = await asyncio.create_subprocess_exec(
+        *shell_argv,
         stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
-        env=ctx.env or None,
+        env={**os.environ, **(ctx.env or {})},
     )
 
     try:

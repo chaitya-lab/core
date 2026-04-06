@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from chaitya.core.kernel import Kernel, KERNEL_COMMANDS, _PendingInputRequest
@@ -223,7 +225,8 @@ class TestDispatch:
         kernel = Kernel(db_path=":memory:")
         await kernel.boot()
         try:
-            result = await kernel.dispatch("shell run --command 'printf hello'")
+            command = "Write-Output hello" if os.name == "nt" else "printf hello"
+            result = await kernel.dispatch(f"shell run --command '{command}'")
             assert result.exit_code == 0
             assert "hello" in result.processed
         finally:
@@ -253,11 +256,17 @@ class TestDispatch:
             created = await kernel.dispatch("session create loop")
             assert created.exit_code == 0
 
-            first = await kernel.dispatch('session send-input loop "read X" --newline')
+            read_cmd = "$X = Read-Host 'X'" if os.name == "nt" else "read X"
+            first = await kernel.dispatch(
+                f'session send-input loop "{read_cmd}" --newline'
+            )
             assert first.exit_code == 0
             second = await kernel.dispatch('session send-input loop "muku" --newline')
             assert second.exit_code == 0
-            third = await kernel.dispatch('session send-input loop "echo ACK:$X" --newline')
+            echo_cmd = "Write-Output ACK:$X" if os.name == "nt" else "echo ACK:$X"
+            third = await kernel.dispatch(
+                f'session send-input loop "{echo_cmd}" --newline'
+            )
             assert third.exit_code == 0
 
             output = await kernel.dispatch("session output loop")

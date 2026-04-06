@@ -107,6 +107,8 @@ class SqliteEventBus:
 
     async def open(self) -> None:
         """Open the database, create the events table, and start the flush task."""
+        if self._db is not None:
+            return
         self._db = await aiosqlite.connect(self._db_path)
         await self._db.execute("PRAGMA journal_mode=WAL")
         await self._db.execute(

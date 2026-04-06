@@ -28,6 +28,39 @@ from dataclasses import asdict
 from chaitya_sdk import ChaityaStream, SessionContext, adapter
 
 
+def _available_signal_map() -> dict[str, int]:
+    """Return the portable subset of supported signals for this platform."""
+    sig_map: dict[str, int] = {
+        "TERM": signal.SIGTERM,
+        "SIGTERM": signal.SIGTERM,
+        "INT": signal.SIGINT,
+        "SIGINT": signal.SIGINT,
+    }
+    optional_names = [
+        "SIGHUP",
+        "SIGKILL",
+        "SIGUSR1",
+        "SIGUSR2",
+        "SIGSTOP",
+        "SIGCONT",
+    ]
+    aliases = {
+        "SIGHUP": "HUP",
+        "SIGKILL": "KILL",
+        "SIGUSR1": "USR1",
+        "SIGUSR2": "USR2",
+        "SIGSTOP": "STOP",
+        "SIGCONT": "CONT",
+    }
+    for name in optional_names:
+        sig = getattr(signal, name, None)
+        if sig is None:
+            continue
+        sig_map[name] = sig
+        sig_map[aliases[name]] = sig
+    return sig_map
+
+
 def _ps_list() -> bytes:
     if sys.platform == "win32":
         proc = asyncio.run(
@@ -228,24 +261,7 @@ async def process_handler(
         except ValueError:
             return f"[error] process signal: --pid must be an integer, got: {pid_str}\n".encode(), 1
 
-        sig_map = {
-            "TERM": signal.SIGTERM,
-            "SIGTERM": signal.SIGTERM,
-            "INT": signal.SIGINT,
-            "SIGINT": signal.SIGINT,
-            "HUP": signal.SIGHUP,
-            "SIGHUP": signal.SIGHUP,
-            "KILL": signal.SIGKILL,
-            "SIGKILL": signal.SIGKILL,
-            "USR1": signal.SIGUSR1,
-            "SIGUSR1": signal.SIGUSR1,
-            "USR2": signal.SIGUSR2,
-            "SIGUSR2": signal.SIGUSR2,
-            "STOP": signal.SIGSTOP,
-            "SIGSTOP": signal.SIGSTOP,
-            "CONT": signal.SIGCONT,
-            "SIGCONT": signal.SIGCONT,
-        }
+        sig_map = _available_signal_map()
         sig = sig_map.get(sig_str)
         if sig is None:
             return f"[error] process signal: unknown signal: {sig_str}\n".encode(), 1
@@ -268,8 +284,10 @@ async def process_handler(
         except ValueError:
             return f"[error] process kill: --pid must be an integer, got: {pid_str}\n".encode(), 1
         try:
-            os.kill(pid, signal.SIGKILL)
-            return f"[ok] process {pid} killed (SIGKILL)\n".encode(), 0
+            kill_sig = getattr(signal, "SIGKILL", signal.SIGTERM)
+            kill_name = "SIGKILL" if hasattr(signal, "SIGKILL") else "SIGTERM"
+            os.kill(pid, kill_sig)
+            return f"[ok] process {pid} killed ({kill_name})\n".encode(), 0
         except PermissionError:
             return f"[error] process: permission denied: {pid}\n".encode(), 1
         except ProcessLookupError:

@@ -83,10 +83,22 @@ class SessionManager:
                 restored += 1
                 logger.info("Restored session %s (state=%s)", record.name, record.state.value)
             else:
-                auto_restart = self._template_auto_restart.get(record.name, False)
-                if auto_restart and record.template:
+                template_data: dict[str, Any] = {}
+                auto_restart = False
+                if record.template:
                     try:
                         template_data = await self._load_template(record.template)
+                        auto_restart = bool(template_data.get("auto_restart_on_kernel_start", False))
+                        self._template_auto_restart[record.name] = auto_restart
+                        self._template_startup_cmd[record.name] = template_data.get("startup_command")
+                    except Exception as exc:
+                        logger.warning(
+                            "Failed to load template %r during restore: %s",
+                            record.template,
+                            exc,
+                        )
+                if auto_restart and record.template:
+                    try:
                         identity = self._identity_from_template(template_data)
                         await self._backend.create(record.name, identity)
                         self._last_activity[record.name] = datetime.now(UTC)
@@ -380,9 +392,10 @@ class SessionManager:
 
         record = await self._store.get_session(name)
         if record:
+            old_state = record.state
             record.state = SessionState.DEAD
             await self._store.save_session(record)
-            await self._emit_state_change(name, record.state, SessionState.DEAD)
+            await self._emit_state_change(name, old_state, SessionState.DEAD)
             await self._bus.emit(
                 Event(
                     type=SESSION_DEAD,

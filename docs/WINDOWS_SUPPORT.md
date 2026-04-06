@@ -1,11 +1,12 @@
 # Chaitya Core Windows Support
 
-Chaitya Core is now fully compatible with Windows using `psmux` as the session substrate. 
+Chaitya Core uses `psmux` as the intended Windows session substrate.
+The Windows design should be treated as `tmux on macOS/Linux` and `psmux on Windows`.
 
 ## Requirements
 
 1.  **psmux**: A native Windows tmux clone built in Rust. It provides the PTY and session management needed for Chaitya's interactive features.
-2.  **PowerShell 7 (pwsh)**: Recommended, but Windows PowerShell or cmd.exe will also work as the default shell within sessions.
+2.  **PowerShell 7 (`pwsh`)**: Recommended as the default shell inside psmux sessions. Windows PowerShell also works.
 
 ## Installation
 
@@ -29,12 +30,36 @@ scoop install psmux
 
 ### 2. Configure Chaitya
 
-Chaitya automatically detects Windows and defaults to the `psmux` backend if available. You can also explicitly set it in your `core.yaml`:
+Configure `psmux` explicitly in `core.yaml`:
 
 ```yaml
 session:
   backend: psmux
 ```
+
+That keeps the session story aligned with the project architecture:
+
+- macOS/Linux: `tmux`
+- Windows: `psmux`
+
+## What To Verify
+
+On Windows, validate the backend with real `psmux` flows instead of only unit tests:
+
+```powershell
+psmux --version
+$env:CHAITYA_RUN_TMUX_TESTS="1"
+.\.venv\Scripts\python.exe -m pytest tests/test_tmux_backend.py tests/test_kernel_tmux_integration.py -q
+```
+
+Recommended manual checks:
+
+- `chaitya session create win-dev`
+- `chaitya session send-input win-dev "Write-Output hello" --newline`
+- `chaitya session output win-dev`
+- `chaitya session set-env win-dev DEMO=value`
+- `chaitya session send-input win-dev "Write-Output $env:DEMO" --newline`
+- `chaitya session signal win-dev SIGINT`
 
 ## Running Tests
 
@@ -43,7 +68,7 @@ To run the full suite including interactive session tests on Windows:
 ```powershell
 # In PowerShell
 $env:CHAITYA_RUN_TMUX_TESTS="1"
-pytest
+.\.venv\Scripts\python.exe -m pytest
 ```
 
 ## Troubleshooting
@@ -52,4 +77,4 @@ pytest
 If you get a `RuntimeError: psmux binary 'psmux' not found on PATH`, verify your installation and ensure that `psmux` is executable from your terminal by running `psmux --version`.
 
 ### psmux: no server running
-Chaitya includes built-in retries and stabilization delays for `psmux` to handle Windows ConPTY startup characteristics. If you frequently encounter this error, you may want to increase the `poll_interval` in your configuration.
+Chaitya includes built-in retries and stabilization delays for `psmux` to handle Windows ConPTY startup characteristics. If you frequently encounter this error, increase the backend `poll_interval` or verify the installed `psmux` version matches the command set Chaitya expects.

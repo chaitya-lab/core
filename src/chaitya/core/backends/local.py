@@ -50,12 +50,24 @@ class LocalProcessBackend:
     This is a minimal backend for testing and development on platforms
     without tmux. It satisfies the SessionBackend protocol.
 
-    Each session spawns a shell subprocess. On Windows this is cmd.exe,
-    on Unix it is /bin/sh.
+    Each session spawns a shell subprocess. On Windows this prefers
+    PowerShell so session behaviour is closer to the real psmux backend.
     """
 
     def __init__(self) -> None:
         self._sessions: dict[str, _LocalSession] = {}
+
+    @staticmethod
+    def _shell_command() -> list[str]:
+        """Return the interactive shell command for the current platform."""
+        if sys.platform == "win32":
+            return [
+                os.environ.get("CHAITYA_WINDOWS_SHELL")
+                or "powershell.exe",
+                "-NoLogo",
+                "-NoProfile",
+            ]
+        return [os.environ.get("SHELL", "/bin/sh")]
 
     async def create(self, name: str, identity: SessionIdentity) -> SessionHandle:
         """Create a new session with a shell subprocess."""
@@ -69,10 +81,8 @@ class LocalProcessBackend:
         else:
             cwd = None
 
-        shell = "cmd.exe" if sys.platform == "win32" else "/bin/sh"
-
         process = await asyncio.create_subprocess_exec(
-            shell,
+            *self._shell_command(),
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
@@ -166,9 +176,11 @@ class LocalProcessBackend:
         session.env[key] = value
         session.identity.env_vars[key] = value
         if session.process.stdin is not None:
-            session.process.stdin.write(
-                f"export {key}={shlex.quote(value)}\n".encode()
-            )
+            if sys.platform == "win32":
+                command = f'$env:{key} = "{value}"\n'
+            else:
+                command = f"export {key}={shlex.quote(value)}\n"
+            session.process.stdin.write(command.encode())
             await session.process.stdin.drain()
 
     async def unset_env(self, name: str, key: str) -> None:
@@ -177,7 +189,11 @@ class LocalProcessBackend:
         session.env.pop(key, None)
         session.identity.env_vars.pop(key, None)
         if session.process.stdin is not None:
-            session.process.stdin.write(f"unset {key}\n".encode())
+            if sys.platform == "win32":
+                command = f"Remove-Item Env:\\{key} -ErrorAction SilentlyContinue\n"
+            else:
+                command = f"unset {key}\n"
+            session.process.stdin.write(command.encode())
             await session.process.stdin.drain()
 
     def _require(self, name: str) -> _LocalSession:
