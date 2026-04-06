@@ -1,25 +1,48 @@
 # Usage
 
-## Install
-
-From source (macOS/Linux):
-
-```bash
-pip install -e .
-pip install -e ./sdk
-```
-
-From source (Windows/PowerShell):
+## Setup (Windows/PowerShell)
 
 ```powershell
+# Create virtual environment
+python -m venv .venv
+
+# Activate it
+.venv\Scripts\Activate.ps1
+
+# Install chaitya core and SDK
 pip install -e . -e ./sdk
-# Or with venv:
-.venv\Scripts\python.exe -m pip install -e . -e ./sdk
+
+# Install playwright for browser tests (optional)
+pip install playwright
+playwright install chromium
+
+# Run tests
+pytest tests\test_tmux_backend.py -v
 ```
 
-Quick smoke test without writing a database:
+## Setup (macOS/Linux)
 
 ```bash
+# Create virtual environment
+python3 -m venv .venv
+
+# Activate it
+source .venv/bin/activate
+
+# Install chaitya core and SDK
+pip install -e . -e ./sdk
+
+# Run tests
+pytest tests/test_tmux_backend.py -v
+```
+
+## Quick Start
+
+```bash
+# Show help and installed adapters
+chaitya info
+
+# Or with --memory to skip database
 chaitya --memory info
 ```
 
