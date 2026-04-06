@@ -94,12 +94,12 @@ class PsmuxBackend(TmuxSessionBackend):
         )
         cwd = (
             os.path.expanduser(identity.working_dir)
-            if identity.working_dir
+            if identity and identity.working_dir
             else os.getcwd()
         )
 
         args = ["new-session", "-d", "-s", name, "-c", cwd]
-        for key, value in identity.env_vars.items():
+        for key, value in (identity.env_vars if identity else {}).items():
             args.extend(["-e", f"{key}={value}"])
         args.append(shell)
         await self._run_tmux(*args)
@@ -107,7 +107,7 @@ class PsmuxBackend(TmuxSessionBackend):
         # Small stabilization delay for psmux server/session initialization on Windows
         await asyncio.sleep(0.5)
 
-        self._env_vars[name] = dict(identity.env_vars)
+        self._env_vars[name] = dict(identity.env_vars if identity else {})
         self._capture_offsets[name] = b""
         return SessionHandle(name=name, backend_id=await self._pane_id(name))
 
