@@ -40,24 +40,6 @@ class SessionState(enum.Enum):
     """Process has exited or pane is gone."""
 
 
-class ExecState(enum.Enum):
-    """Session execution gate state.
-
-    Controls whether commands execute or return dry-run info.
-    Stored in session metadata, persists across restarts.
-    """
-
-    DISABLED = "disabled"
-    """Default. Commands return dry-run info only. --dry-run is implicit."""
-
-    ENABLED = "enabled"
-    """Commands execute normally. Explicit --confirm flag required for
-    adapter-level confirmation gates."""
-
-    READONLY = "readonly"
-    """No execution at all. Even dry-run is blocked. Read-only session."""
-
-
 class InputType(enum.Enum):
     """Suspension input types (PRD §8)."""
 
@@ -213,6 +195,15 @@ class SessionRecord:
     template: str | None = None
     identity: SessionIdentity = field(default_factory=SessionIdentity)
     metadata: dict[str, Any] = field(default_factory=dict)
+    exec_mode: str = "enabled"
+    """Execution gate: 'enabled' | 'disabled' | 'readonly'.
+    
+    - enabled:  commands execute normally.
+    - disabled: commands return dry-run preview only (--dry-run or --confirm bypasses).
+    - readonly: no execution at all, not even dry-run.
+    
+    Stored directly on the record for simplicity — no separate enum or metadata key.
+    """
     created_at: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
     last_activity: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
 

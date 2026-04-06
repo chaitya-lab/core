@@ -69,7 +69,6 @@ from chaitya.core.types import (
     KERNEL_STARTED,
     SESSION_RESUMED,
     SESSION_WAITING,
-    ExecState,
     AdapterLoadError,
     AdapterPermissions,
     ChaityaStream,
@@ -601,8 +600,8 @@ class Kernel:
         is_confirm = bool(ctx.env.get("confirm"))
 
         if ctx.session_id:
-            exec_state = await self._session_mgr.get_exec_state(ctx.session_id)
-            if exec_state == ExecState.READONLY:
+            exec_mode = await self._session_mgr.get_exec_mode(ctx.session_id)
+            if exec_mode == "readonly":
                 sub = ctx.env.get("__subcommand__", "")
                 return (
                     f"[readonly] Session '{ctx.session_id}' is in readonly mode. "
@@ -610,7 +609,7 @@ class Kernel:
                     f"Use 'session exec enable {ctx.session_id}' to enable.\n".encode("utf-8"),
                     1,
                 )
-            if exec_state == ExecState.DISABLED and not is_dry_run and not is_confirm:
+            if exec_mode == "disabled" and not is_dry_run and not is_confirm:
                 sub = ctx.env.get("__subcommand__", "")
                 raw = ctx.env.get("__args__", [])
                 args_str = " ".join(str(a) for a in raw)
@@ -1130,7 +1129,7 @@ class Kernel:
             lines = [
                 f"Name: {rec.name}",
                 f"State: {rec.state.value}",
-                f"Exec: {exec_state}",
+                f"Exec: {rec.exec_mode}",
                 f"Created: {rec.created_at}",
             ]
             return "\n".join(lines).encode("utf-8"), 0
@@ -1141,20 +1140,20 @@ class Kernel:
             if action == "status":
                 if not name:
                     return b"Usage: session exec status <name>", 1
-                state = await self._session_mgr.get_exec_state(name)
-                return f"Session '{name}' exec state: {state.value}\n".encode("utf-8"), 0
+                mode = await self._session_mgr.get_exec_mode(name)
+                return f"Session '{name}' exec mode: {mode}\n".encode("utf-8"), 0
             if action in ("enable", "disable", "readonly"):
                 if not name:
                     return f"Usage: session exec {action} <name>".encode("utf-8"), 1
-                state_map = {
-                    "enable": ExecState.ENABLED,
-                    "disable": ExecState.DISABLED,
-                    "readonly": ExecState.READONLY,
+                mode_map = {
+                    "enable": "enabled",
+                    "disable": "disabled",
+                    "readonly": "readonly",
                 }
-                ok = await self._session_mgr.set_exec_state(name, state_map[action])
+                ok = await self._session_mgr.set_exec_mode(name, mode_map[action])
                 if not ok:
                     return f"Session '{name}' not found.".encode("utf-8"), 1
-                return f"Session '{name}' exec state set to {action}.\n".encode("utf-8"), 0
+                return f"Session '{name}' exec mode set to {action}.\n".encode("utf-8"), 0
             return (
                 b"Usage: session exec <enable|disable|readonly|status> <name>\n"
                 b"  enable   - allow commands to execute\n"

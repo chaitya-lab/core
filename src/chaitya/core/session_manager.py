@@ -26,7 +26,6 @@ from chaitya.core.types import (
     SESSION_STATE_CHANGED,
     SESSION_STUCK,
     Event,
-    ExecState,
     SessionHandle,
     SessionIdentity,
     SessionRecord,
@@ -161,7 +160,7 @@ class SessionManager:
             state=SessionState.IDLE,
             template=template,
             identity=identity,
-            metadata={"exec_state": "enabled"},
+            exec_mode="enabled",
         )
         await self._store.save_session(record)
         self._last_activity[name] = datetime.now(UTC)
@@ -191,30 +190,36 @@ class SessionManager:
 
         return handle
 
-    async def get_exec_state(self, name: str) -> "ExecState":
-        """Return the exec gate state for a session.
+    async def get_exec_mode(self, name: str) -> str:
+        """Return the exec gate mode for a session.
 
-        Defaults to ENABLED if session does not exist (allows session management).
-        Returns DISABLED or READONLY if session exists and has that state.
+        Returns 'enabled' | 'disabled' | 'readonly'.
+        Defaults to 'enabled' if session does not exist (allows session management).
+        Defaults to 'enabled' if session record has no exec_mode set.
         """
-        from chaitya.core.types import ExecState
-
         record = await self._store.get_session(name)
         if record is None:
-            return ExecState.ENABLED
-        return ExecState(record.metadata.get("exec_state", ExecState.DISABLED.value))
+            return "enabled"
+        return record.exec_mode or "enabled"
 
-    async def set_exec_state(self, name: str, state: "ExecState") -> bool:
-        """Set the exec gate state for a session.
+    async def set_exec_mode(self, name: str, mode: str) -> bool:
+        """Set the exec gate mode for a session.
+
+        Args:
+            mode: 'enabled' | 'disabled' | 'readonly'
 
         Returns True on success, False if session not found.
         """
+        if mode not in ("enabled", "disabled", "readonly"):
+            raise ValueError(
+                f"Invalid exec_mode: {mode!r}. Must be 'enabled', 'disabled', or 'readonly'."
+            )
         record = await self._store.get_session(name)
         if record is None:
             return False
-        record.metadata["exec_state"] = state.value
+        record.exec_mode = mode
         await self._store.save_session(record)
-        logger.info("Session %s exec_state set to %s", name, state.value)
+        logger.info("Session %s exec_mode set to %s", name, mode)
         return True
 
     async def kill(self, name: str) -> None:
