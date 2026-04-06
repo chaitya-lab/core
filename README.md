@@ -46,9 +46,9 @@ CHAITYA_RUN_TMUX_TESTS=1 python3 -m pytest tests/test_tmux_backend.py -q
 chaitya info
 ```
 
-Current status: macOS/Linux use a real `tmux` backend by default when `tmux` is available. `LocalProcessBackend` remains in-tree for fallback and focused unit testing.
+Current status: macOS/Linux use a real `tmux` backend by default. Windows uses `psmux`. Sessions are persistent named environments with PTY support.
 
-The repository also ships first-party workspace adaptors for `file` and `shell`. They are discovered directly from `adaptors/core/` during development, so the kernel can boot and execute real adaptor commands from the repo without extra packaging steps.
+The repository ships first-party workspace adaptors for `file`, `shell`, `route`, `process`, and `test`. They are discovered directly from `adaptors/core/` during development, so the kernel can boot and execute real adaptor commands from the repo without extra packaging steps.
 
 External projects can add custom adaptors in two ways:
 
