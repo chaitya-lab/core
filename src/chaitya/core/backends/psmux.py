@@ -13,7 +13,7 @@ Install psmux:
     # or: cargo install psmux
     # or: scoop install psmux
 
-Reference: PRD §3.3 — "psmux (Windows, v2)"
+Reference: PRD Section 3.3 — "psmux (Windows, v2)"
 """
 
 from __future__ import annotations
@@ -21,14 +21,13 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-import shlex
 import shutil
 import sys
-
-from chaitya.core.types import SessionHandle, SessionIdentity
+from typing import NoReturn
 
 # Re-use TmuxSessionBackend for all shared tmux-protocol logic
 from chaitya.core.backends.tmux import TmuxSessionBackend
+from chaitya.core.types import SessionHandle, SessionIdentity
 
 logger = logging.getLogger("chaitya.core.backends.psmux")
 
@@ -227,6 +226,7 @@ class PsmuxBackend(TmuxSessionBackend):
                 continue
 
             raise ValueError(error or f"psmux command failed: {' '.join(args)}")
+        raise RuntimeError("unreachable")  # mypy completeness check
 
 
 def is_psmux_available(bin_name: str = "psmux") -> bool:

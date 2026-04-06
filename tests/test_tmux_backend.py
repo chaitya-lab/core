@@ -7,8 +7,8 @@ import os
 
 import pytest
 
-from chaitya.core.backends.tmux import TmuxSessionBackend
 from chaitya.core.backends.psmux import PsmuxBackend, is_psmux_available
+from chaitya.core.backends.tmux import TmuxSessionBackend
 from chaitya.core.protocols import SessionBackend
 from chaitya.core.types import SessionIdentity
 
@@ -62,7 +62,10 @@ class TestTmuxBackend:
         name = "tmux-test-output"
         await backend.create(name, SessionIdentity())
         try:
-            cmd = b"echo 'CHAITYA_TMUX_OK'\r\n" if os.name == "nt" else b"printf 'CHAITYA_TMUX_OK\\n'\n"
+            if os.name == "nt":
+                cmd = b"echo 'CHAITYA_TMUX_OK'\r\n"
+            else:
+                cmd = b"printf 'CHAITYA_TMUX_OK\\n'\n"
             await backend.send_input(name, cmd)
             output = await _wait_for_output(backend, name, "CHAITYA_TMUX_OK")
             assert "CHAITYA_TMUX_OK" in output

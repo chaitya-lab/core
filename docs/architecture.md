@@ -20,7 +20,7 @@ Everything else should prefer to live in adaptors.
 
 - `Kernel`: top-level orchestrator (handles 6 built-in commands: info, session, input, output, watch, registry)
 - `SessionManager`: session lifecycle and state
-- `SessionBackend`: concrete substrate — tmux on macOS/Linux, psmux on Windows, local-process fallback
+- `SessionBackend`: concrete substrate — tmux on macOS/Linux, psmux on Windows, local-process fallback. Both tmux and psmux implement the same Protocol — the kernel session management is identical.
 - `SqliteEventBus`: event persistence and pub/sub (stream events like stdout_chunk NOT persisted to DB)
 - `SqliteStore`: session records, events, and pending suspension requests
 - `PipelineOrchestrator`: command parsing and execution flow

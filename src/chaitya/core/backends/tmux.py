@@ -157,7 +157,13 @@ class TmuxSessionBackend:
             raise ValueError(f"Session {name!r} not found")
 
     async def _pane_id(self, name: str) -> str:
-        return await self._run_tmux_capture("display-message", "-p", "-t", name, "#{session_name}:#{window_index}.#{pane_index}")
+        return await self._run_tmux_capture(
+            "display-message",
+            "-p",
+            "-t",
+            name,
+            "#{session_name}:#{window_index}.#{pane_index}",
+        )
 
     async def _capture_pane(self, name: str) -> bytes:
         return (
