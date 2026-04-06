@@ -252,11 +252,13 @@ def parse_chain(expression: str) -> CommandChain:
 
 # Type for adapter command execution functions.
 # Adapters register these with the kernel. The pipeline calls them.
+# Handlers can be one-shot (returns bytes + exit code) or streaming
+# (yields bytes chunks as they arrive).
 AdapterHandler = Callable[
     [ChaityaStream, "PipelineContext"],
-    Awaitable[tuple[bytes, int]],
+    Awaitable[tuple[bytes, int] | AsyncIterator[bytes]],
 ]
-"""Signature: async (input_stream, ctx) -> (output_bytes, exit_code)"""
+"""Signature: async (input_stream, ctx) -> (output_bytes, exit_code) | AsyncIterator[bytes]"""
 
 
 # ---------------------------------------------------------------------------
@@ -457,15 +459,29 @@ class PipelineOrchestrator:
         current_input: ChaityaStream,
         step_ctx: PipelineContext,
         limits: Any,
-    ) -> tuple[bytes, int]:
+    ) -> tuple[bytes, int] | AsyncIterator[bytes]:
         """Invoke a handler with timeout enforcement."""
         timeout = limits.max_execution_seconds
+        result = handler(current_input, step_ctx)
+        if isinstance(result, AsyncIterator):
+            if timeout and timeout > 0:
+
+                async def _timeout_stream() -> AsyncIterator[bytes]:
+                    start = time.monotonic()
+
+                    async def _check_timeout(chunk: bytes) -> bytes:
+                        if time.monotonic() - start > timeout:
+                            raise asyncio.TimeoutError()
+                        return chunk
+
+                    async for c in result:
+                        yield await _check_timeout(c)
+
+                return _timeout_stream()
+            return result
         if timeout and timeout > 0:
-            return await asyncio.wait_for(
-                handler(current_input, step_ctx),
-                timeout=timeout,
-            )
-        return await handler(current_input, step_ctx)
+            return await asyncio.wait_for(result, timeout=timeout)
+        return await result
 
     def parse_chain(self, expression: str) -> CommandChain:
         """Parse a command expression into a structured chain."""
@@ -476,16 +492,14 @@ class PipelineOrchestrator:
         if not chain.steps:
             return CommandOutput()
 
-        # Build initial input stream from context
-        current_input = ctx.input_stream or ChaityaStream()
         accumulated_stdout = bytearray()
         accumulated_stderr = bytearray()
         last_exit_code = 0
         start_time = time.monotonic()
         skip_next = False
+        current_input = ctx.input_stream or ChaityaStream()
 
         for cmd, operator in chain.steps:
-            # If a previous OR short-circuited, skip this command
             if skip_next:
                 skip_next = False
                 continue
@@ -500,7 +514,7 @@ class PipelineOrchestrator:
                 ).encode()
                 accumulated_stderr.extend(err_msg)
                 last_exit_code = 127
-                if operator in (PipelineOperator.AND, PipelineOperator.PIPE):
+                if operator in (PipelineOperator.AND, PipelineOperator.OR):
                     break
                 continue
 
@@ -519,9 +533,7 @@ class PipelineOrchestrator:
             limits = self._get_resource_limits(cmd.adapter)
 
             try:
-                output_bytes, exit_code = await self._invoke_with_limits(
-                    handler, current_input, step_ctx, limits
-                )
+                result = await self._invoke_with_limits(handler, current_input, step_ctx, limits)
             except asyncio.TimeoutError:
                 err_msg = (
                     f"[error] {cmd.adapter}.{cmd.subcommand}: "
@@ -529,7 +541,7 @@ class PipelineOrchestrator:
                 ).encode()
                 accumulated_stderr.extend(err_msg)
                 last_exit_code = 124
-                if operator in (PipelineOperator.AND, PipelineOperator.PIPE):
+                if operator in (PipelineOperator.AND, PipelineOperator.OR):
                     break
                 continue
             except Exception as exc:
@@ -538,25 +550,18 @@ class PipelineOrchestrator:
                 err_bytes = err_msg.encode("utf-8")
                 accumulated_stderr.extend(err_bytes)
                 last_exit_code = 1
-                if operator in (PipelineOperator.AND, PipelineOperator.PIPE):
+                if operator in (PipelineOperator.AND, PipelineOperator.OR):
                     break
                 continue
 
+            output_bytes, exit_code = await self._handle_result(
+                result,
+                accumulated_stdout,
+                accumulated_stderr,
+                limits,
+            )
+
             last_exit_code = exit_code
-            if (
-                limits.max_output_bytes
-                and len(accumulated_stdout) + len(output_bytes) > limits.max_output_bytes
-            ):
-                err_msg = (
-                    f"[error] {cmd.adapter}.{cmd.subcommand}: "
-                    f"output exceeds {limits.max_output_bytes:,} byte limit\n"
-                ).encode()
-                accumulated_stderr.extend(err_msg)
-                last_exit_code = 1
-                if operator in (PipelineOperator.AND, PipelineOperator.PIPE):
-                    break
-                continue
-            accumulated_stdout.extend(output_bytes)
 
             if operator == PipelineOperator.AND and exit_code != 0:
                 break
@@ -583,6 +588,43 @@ class PipelineOrchestrator:
             overflow_dir=self._overflow_dir,
             output_type=self._get_output_type(chain),
         )
+
+    async def _handle_result(
+        self,
+        result: tuple[bytes, int] | AsyncIterator[bytes],
+        accumulated_stdout: bytearray,
+        accumulated_stderr: bytearray,
+        limits: Any,
+    ) -> tuple[bytes, int]:
+        """Handle a handler result — one-shot or streaming.
+
+        Streaming handlers yield chunks. All chunks are accumulated for the
+        final L2 output. For the current step's output (passed to next step
+        in a PIPE), the full accumulated bytes from this step are returned.
+        """
+        if isinstance(result, AsyncIterator):
+            output_bytes = bytearray()
+            async for chunk in result:
+                output_bytes.extend(chunk)
+                accumulated_stdout.extend(chunk)
+                if limits.max_output_bytes and len(accumulated_stdout) > limits.max_output_bytes:
+                    err_msg = f"[error] output exceeds {limits.max_output_bytes:,} byte limit\n"
+                    accumulated_stderr.extend(err_msg.encode())
+                    return bytes(output_bytes), 1
+            return bytes(output_bytes), 0
+
+        output_bytes, exit_code = result
+
+        if (
+            limits.max_output_bytes
+            and len(accumulated_stdout) + len(output_bytes) > limits.max_output_bytes
+        ):
+            err_msg = f"[error] output exceeds {limits.max_output_bytes:,} byte limit\n"
+            accumulated_stderr.extend(err_msg.encode())
+            return output_bytes, 1
+
+        accumulated_stdout.extend(output_bytes)
+        return output_bytes, exit_code
 
     async def execute(
         self, chain: CommandChain, ctx: PipelineContext

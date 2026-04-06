@@ -23,7 +23,10 @@ import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
 
 from chaitya_sdk.context import (
     _configure_permissions,
@@ -183,6 +186,8 @@ class Kernel:
         self._pending_inputs: dict[str, _PendingInputRequest] = {}
         self._input_timeout_seconds: int = input_timeout_seconds
         self._input_timeout_task: asyncio.Task[None] | None = None
+        self._route_action_sub: asyncio.Task[None] | None = None
+        self._subscriptions: dict[str, Any] = {}
 
         # --- Subsystem composition ---
         # Use provided event bus, or build one from config (default: SqliteEventBus)
@@ -247,6 +252,7 @@ class Kernel:
         if backend == "auto":
             if sys.platform == "win32":
                 from chaitya.core.backends.psmux import PsmuxBackend
+
                 return PsmuxBackend()
             else:
                 return TmuxSessionBackend()
@@ -254,6 +260,7 @@ class Kernel:
             return TmuxSessionBackend()
         if backend == "psmux":
             from chaitya.core.backends.psmux import PsmuxBackend  # type: ignore[import]
+
             return PsmuxBackend()
         raise ValueError(
             f"Unsupported session backend {session_backend!r}. Supported: auto (default), tmux, psmux."
@@ -388,6 +395,7 @@ class Kernel:
             self._register_kernel_handlers()
             self._register_loaded_adapter_handlers()
             await self._restore_pending_inputs()
+            self._register_event_subscribers()
             logger.info("Step 7/10: Kernel command handlers registered")
 
             # Step 8: Wire registry into SDK context
@@ -462,6 +470,15 @@ class Kernel:
                 except asyncio.CancelledError:
                     pass
                 self._input_timeout_task = None
+
+            # Cancel route action subscriber
+            if self._route_action_sub and not self._route_action_sub.done():
+                self._route_action_sub.cancel()
+                try:
+                    await self._route_action_sub
+                except asyncio.CancelledError:
+                    pass
+                self._route_action_sub = None
 
             # Stop session manager (cancels stuck monitor)
             await self._session_mgr.stop()
@@ -871,6 +888,39 @@ class Kernel:
             pending.ctx,
             args=resumed_args,
         )
+
+    def _register_event_subscribers(self) -> None:
+        """Register kernel-level event bus subscribers.
+
+        These handle cross-cutting concerns that need to react to events
+        without going through adapter dispatch.
+        """
+        self._route_action_sub = asyncio.create_task(self._subscribe_route_action())
+
+    async def _subscribe_route_action(self) -> None:
+        """Subscribe to route.action_requested events and dispatch actions."""
+
+        async def _on_route_action(event: Any) -> None:
+            action = str(event.payload.get("action", ""))
+            matched = event.payload.get("matched_content", "")
+            if not action:
+                return
+            logger.info("[route --do] dispatching: %s", action)
+            try:
+                result = await self.dispatch(action)
+                logger.info(
+                    "[route --do] completed: %s (exit=%d)",
+                    action,
+                    result.exit_code,
+                )
+            except Exception as exc:
+                logger.error("[route --do] failed: %s — %s", action, exc)
+
+        sub = await self._event_bus.subscribe(
+            EventFilter(event_types=["route.action_requested"]),
+            _on_route_action,
+        )
+        self._subscriptions[sub.subscription_id] = sub
 
     async def _restore_pending_inputs(self) -> None:
         for item in await self._store.list_pending_inputs():
@@ -1370,7 +1420,7 @@ class Kernel:
 
     async def _handle_watch(
         self, input_stream: ChaityaStream, ctx: PipelineContext
-    ) -> tuple[bytes, int]:
+    ) -> tuple[bytes, int] | AsyncIterator[bytes]:
         """Handle ``watch <options>`` — query or stream events.
 
         PRD §5:
@@ -1380,7 +1430,8 @@ class Kernel:
             watch --live --session <name> [--on <event-type>] [--exit-after N] [--timeout N]
 
         Default mode (no --live): query history, return JSON lines. Pipeable.
-        --live mode: stream events to stdout in real-time. Blocking.
+        --live mode: streams events as JSON lines (AsyncIterator[bytes]).
+        Chunks are yielded in real-time and flow through the pipeline for piping.
         """
         import json
         from datetime import datetime, timedelta
@@ -1397,7 +1448,7 @@ class Kernel:
             event_types = [str(ctx.env["on"])]
 
         if is_live:
-            return await self._watch_live(
+            return self._watch_live(
                 session_id=str(session_id) if session_id else None,
                 event_types=event_types,
                 exit_after=exit_after,
@@ -1462,10 +1513,14 @@ class Kernel:
         event_types: list[str] | None,
         exit_after: int,
         timeout_seconds: int,
-    ) -> tuple[bytes, int]:
-        """Stream live events to stdout as JSON lines.
+    ) -> AsyncIterator[bytes]:
+        """Stream live events as JSON line chunks.
 
-        Writes directly to sys.stdout.buffer for real-time output.
+        Async generator. Each yield is one event as a JSON line.
+        When piped through the pipeline, chunks arrive in real-time.
+        The pipeline's _handle_result accumulates all chunks for the final
+        L2 output while yielding them for piping.
+
         Blocks until exit_after events are received, timeout expires,
         or the kernel is shutting down.
         """
@@ -1473,7 +1528,6 @@ class Kernel:
 
         q: asyncio.Queue[Event | None] = asyncio.Queue()
         count = 0
-        stop_reason = "timeout"
 
         def _make_handler() -> Any:
             async def _on_event(event: Event) -> None:
@@ -1497,11 +1551,9 @@ class Kernel:
                     else:
                         ev = await q.get()
                 except TimeoutError:
-                    stop_reason = "timeout"
                     break
 
                 if ev is None:
-                    stop_reason = "stopped"
                     break
 
                 event_dict = {
@@ -1516,25 +1568,17 @@ class Kernel:
                     "parent_event_id": ev.parent_event_id,
                     "request_id": ev.request_id,
                 }
-                line = json.dumps(event_dict, separators=(",", ":"))
-                sys.stdout.buffer.write(line.encode("utf-8") + b"\n")
-                sys.stdout.buffer.flush()
+                line = json.dumps(event_dict, separators=((",", ":")))
+                yield (line + "\n").encode("utf-8")
 
                 count += 1
                 if exit_after > 0 and count >= exit_after:
-                    stop_reason = f"{count} events"
                     break
 
                 if self._shutting_down:
-                    stop_reason = "kernel shutdown"
                     break
         finally:
             await _cleanup()
-
-        return (
-            f"[watch --live] stopped ({stop_reason}), {count} event(s) streamed\n".encode(),
-            0,
-        )
 
     async def _handle_registry(
         self, input_stream: ChaityaStream, ctx: PipelineContext
