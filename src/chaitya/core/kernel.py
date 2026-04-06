@@ -1086,11 +1086,11 @@ class Kernel:
         lines.append("  session attach <name>                  Attach to a session (tmux)")
         lines.append("  session detach <name>                  Detach from a session")
         lines.append("  session output <name>                  Read session output")
-        lines.append("  session send-input <name> <text>       Send input to session")
-        lines.append("  session send-input <name> --newline    Send newline only")
-        lines.append("  session send-input <name> --key <key> Send key (enter/tab/space)")
-        lines.append("  session set-env <name> KEY=VALUE      Set environment variable")
-        lines.append("  session unset-env <name> KEY           Unset environment variable")
+        lines.append("  session send <name> [--text <text>]    Send input to session")
+        lines.append("  session send <name> --newline           Send newline only")
+        lines.append("  session send <name> --key <key>         Send key (enter/tab/space)")
+        lines.append("  session set-env <name> --key <K> --value <V>  Set environment variable")
+        lines.append("  session unset-env <name> --key <K>     Unset environment variable")
         lines.append("  session signal <name> <signal>         Send signal (SIGTERM/SIGINT)")
         lines.append("  session kill <name>                   Kill a session")
         lines.append("")
@@ -1231,11 +1231,11 @@ class Kernel:
             except Exception as exc:
                 return str(exc).encode("utf-8"), 1
 
-        if sub == "send-input":
+        if sub in ("send", "send-input"):
             name = ctx.env.get("name") or (positional[0] if positional else "")
             if not name:
-                return b"Usage: session send-input <name> <text>|--newline|--key <key>", 1
-            raw_text = positional[1] if len(positional) > 1 else ""
+                return b"Usage: session send <name> [--text <text>] [--newline] [--key <key>]", 1
+            text = str(ctx.env.get("text", "") or (positional[1] if len(positional) > 1 else ""))
             newline = bool(ctx.env.get("newline"))
             key = str(ctx.env.get("key", "")).lower()
             if key:
@@ -1249,7 +1249,7 @@ class Kernel:
                 if data is None:
                     return f"Unsupported key: {key}".encode(), 1
             else:
-                data = raw_text.encode("utf-8")
+                data = text.encode("utf-8")
                 if newline:
                     data += b"\n"
             try:
@@ -1309,10 +1309,10 @@ class Kernel:
 
         if sub == "set-env":
             name = ctx.env.get("name") or (positional[0] if positional else "")
-            pair = positional[1] if len(positional) > 1 else ""
-            if not name or "=" not in pair:
-                return b"Usage: session set-env <name> KEY=VALUE", 1
-            key, value = pair.split("=", 1)
+            key = str(ctx.env.get("key", "") or (positional[1] if len(positional) > 1 else ""))
+            value = str(ctx.env.get("value", ""))
+            if not name or not key:
+                return b"Usage: session set-env <name> --key <KEY> --value <VALUE>", 1
             try:
                 await self._session_mgr.set_env(name, key, value)
                 return f"Environment set for session '{name}': {key}".encode(), 0
@@ -1321,9 +1321,9 @@ class Kernel:
 
         if sub == "unset-env":
             name = ctx.env.get("name") or (positional[0] if positional else "")
-            key = positional[1] if len(positional) > 1 else ""
+            key = str(ctx.env.get("key", "") or (positional[1] if len(positional) > 1 else ""))
             if not name or not key:
-                return b"Usage: session unset-env <name> KEY", 1
+                return b"Usage: session unset-env <name> --key <KEY>", 1
             try:
                 await self._session_mgr.unset_env(name, key)
                 return f"Environment removed for session '{name}': {key}".encode(), 0

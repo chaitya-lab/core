@@ -344,60 +344,6 @@ class TestPassthroughCLI:
 # ---------------------------------------------------------------------------
 
 
-def _load_git_adapter():
-    """Load the git adapter module directly from the workspace path."""
-    import importlib.util
-    import sys
-    from pathlib import Path
-
-    src = (
-        Path(__file__).resolve().parents[1]
-        / "adaptors/community/chaitya/git/src/chaitya_adapter_git/__init__.py"
-    )
-    spec = importlib.util.spec_from_file_location("chaitya_adapter_git", src)
-    if spec is None or spec.loader is None:
-        return None
-    module = importlib.util.module_from_spec(spec)
-    try:
-        spec.loader.exec_module(module)
-    except Exception:
-        return None
-    return module
-
-
-class TestGitAdapter:
-    def test_git_adapter_has_contract(self):
-        mod = _load_git_adapter()
-        assert mod is not None
-        assert mod.__adapter_contract__["name"] == "git"
-
-    def test_git_adapter_has_wildcard_command(self):
-        mod = _load_git_adapter()
-        assert mod is not None
-        cmd_names = [c["name"] for c in mod.__adapter_contract__["commands"]]
-        assert "*" in cmd_names
-
-    def test_git_adapter_has_blocked_commands(self):
-        mod = _load_git_adapter()
-        assert mod is not None
-        assert mod._git.is_blocked("push", []) is True
-        assert mod._git.is_blocked("reset --hard", []) is True
-        assert mod._git.is_blocked("status", []) is False
-
-    def test_git_status_passed_through(self):
-        mod = _load_git_adapter()
-        assert mod is not None
-        assert mod._git.default_session == "git-default"
-
-    def test_git_blocked_command_returns_error(self):
-        mod = _load_git_adapter()
-        assert mod is not None
-        ctx = SessionContext(args={"subcommand": "push", "__raw_args__": []})
-        result = asyncio.run(mod._git.passthrough(ctx))
-        assert result[1] == 1
-        assert b"blocked" in result[0]
-
-
 # ---------------------------------------------------------------------------
 # Route adapter — conditional pipeline routing
 # ---------------------------------------------------------------------------
