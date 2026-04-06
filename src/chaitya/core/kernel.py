@@ -1065,92 +1065,32 @@ class Kernel:
                     lines.append(f"Dependencies: {', '.join(c.depends_on)}")
                 return "\n".join(lines).encode("utf-8"), 0
 
-        # Default: comprehensive overview
+        # Default: compact overview for LLM consumption
         sessions = await self._store.list_sessions()
         active = [s for s in sessions if s.state.value not in ("dead",)]
         lines: list[str] = []
 
         lines.append(f"Chaitya Core v{__version__}  (uptime: {round(self.uptime_seconds, 1)}s)")
-        lines.append("=" * 60)
         lines.append("")
-
-        lines.append("KERNEL COMMANDS")
-        lines.append("-" * 40)
-        lines.append(f"  {self.cli_name}                          Show this help")
-        lines.append(f"  {self.cli_name} info [adapter]          System or adapter details")
-        lines.append(f"  {self.cli_name} info --kernel           Kernel status")
+        lines.append("info [name]    Show adapter or kernel details")
+        lines.append("session       list|create|status|attach|detach|output|send|set-env|signal|kill")
+        lines.append("watch         --all|--session <name>|--search <query>|--live --session <name>")
+        lines.append("input         list|respond <id> <value>")
+        lines.append("output        --filter <pattern>|--format json|text")
+        lines.append("registry      list|disable|enable|validate <name>")
+        lines.append(f"<adapter> <cmd>  Run adapter command")
         lines.append("")
-        lines.append("  session list                           List all sessions")
-        lines.append("  session create <name> [--template]    Create a new session")
-        lines.append("  session status <name>                  Show session status")
-        lines.append("  session attach <name>                  Attach to a session (tmux)")
-        lines.append("  session detach <name>                  Detach from a session")
-        lines.append("  session output <name>                  Read session output")
-        lines.append("  session send <name> [--text <text>]    Send input to session")
-        lines.append("  session send <name> --newline           Send newline only")
-        lines.append("  session send <name> --key <key>         Send key (enter/tab/space)")
-        lines.append("  session set-env <name> --key <K> --value <V>  Set environment variable")
-        lines.append("  session unset-env <name> --key <K>     Unset environment variable")
-        lines.append("  session signal <name> <signal>         Send signal (SIGTERM/SIGINT)")
-        lines.append("  session kill <name>                   Kill a session")
-        lines.append("")
-        lines.append("  watch --all                            Query history: all events")
-        lines.append("  watch --session <name> [--on <type>]   Query history: session events")
-        lines.append("  watch --search <query>                 Query history: full-text search")
-        lines.append("  watch --live --session <name>         Stream live events to stdout")
-        lines.append("")
-        lines.append("  input list                            List pending input requests")
-        lines.append("  input respond <id> <value>            Respond to a suspended command")
-        lines.append("")
-        lines.append("  output --filter <pattern>             Filter output")
-        lines.append("  output --format json|text             Set output format")
-        lines.append("")
-        lines.append("  registry list                         List loaded adapters")
-        lines.append("  registry disable <name>               Disable an adapter")
-        lines.append("  registry enable <name>                Re-enable an adapter")
-        lines.append("  registry validate <name>             Validate an adapter contract")
-        lines.append("")
-        lines.append("  <adapter> <subcommand> [args]        Run adapter command")
-        lines.append("  <adapter>                             Show adapter info")
-        lines.append("")
-
-        lines.append("ACTIVE SESSIONS")
-        lines.append("-" * 40)
-        if active:
-            lines.append(f"  {'NAME':20s} {'STATE':10s} {'TEMPLATE'}")
-            for s in active:
-                tmpl = s.template or "-"
-                lines.append(f"  {s.name:20s} {s.state.value:10s} {tmpl}")
-        else:
-            lines.append("  No active sessions.")
-        lines.append("")
-        lines.append("  Use 'session create <name>' to create a new session.")
-        lines.append("  Use 'session attach <name>' to attach to a session (tmux).")
-        lines.append("  Use 'session list' to see all sessions.")
+        lines.append(f"SESSIONS: {', '.join(s.name for s in active) if active else 'none'}")
 
         adapters = self._registry.loaded_adapters
-        lines.append("")
-        lines.append("INSTALLED ADAPTERS")
-        lines.append("-" * 40)
         if adapters:
-            lines.append("  NAME                 DESCRIPTION                COMMANDS")
+            lines.append("ADAPTERS:")
             for name, pkg in sorted(adapters.items()):
-                desc = (
-                    (pkg.contract.description[:24] + "...")
-                    if pkg.contract and len(pkg.contract.description) > 24
-                    else (pkg.contract.description if pkg.contract else "")
-                )
                 cmds = (
                     ", ".join(cmd.name for cmd in (pkg.contract.commands if pkg.contract else []))
                     or "-"
                 )
-                lines.append(f"  {name:20s} {desc:25s} {cmds}")
-            lines.append("")
-            lines.append(f"  Run '{self.cli_name} info <adapter>' for adapter details.")
-            lines.append(f"  Run '{self.cli_name} <adapter>' without subcommand to see its info.")
-        else:
-            lines.append("  No adapters installed.")
-            lines.append("  Install adapters with: pip install chaitya-adapter-<name>")
+                lines.append(f"  {name:12} {cmds}")
 
         return "\n".join(lines).encode("utf-8"), 0
 

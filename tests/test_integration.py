@@ -292,7 +292,10 @@ class TestRegistry:
 
 class TestPipeline:
     async def test_pipeline_two_commands_chained(self, kernel: Kernel) -> None:
-        result = await kernel.dispatch("test echo --message ok | shell run --command 'cat'")
+        if os.name == "nt":
+            result = await kernel.dispatch("test echo --message ok | shell run --command '$input'")
+        else:
+            result = await kernel.dispatch("test echo --message ok | shell run --command 'grep .'")
         assert result.exit_code == 0
         assert "ok" in result.processed
 
