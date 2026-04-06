@@ -26,6 +26,7 @@ from chaitya.core.types import (
     SESSION_STATE_CHANGED,
     SESSION_STUCK,
     Event,
+    ExecState,
     SessionHandle,
     SessionIdentity,
     SessionRecord,
@@ -160,6 +161,7 @@ class SessionManager:
             state=SessionState.IDLE,
             template=template,
             identity=identity,
+            metadata={"exec_state": "enabled"},
         )
         await self._store.save_session(record)
         self._last_activity[name] = datetime.now(UTC)
@@ -188,6 +190,32 @@ class SessionManager:
                 )
 
         return handle
+
+    async def get_exec_state(self, name: str) -> "ExecState":
+        """Return the exec gate state for a session.
+
+        Defaults to ENABLED if session does not exist (allows session management).
+        Returns DISABLED or READONLY if session exists and has that state.
+        """
+        from chaitya.core.types import ExecState
+
+        record = await self._store.get_session(name)
+        if record is None:
+            return ExecState.ENABLED
+        return ExecState(record.metadata.get("exec_state", ExecState.DISABLED.value))
+
+    async def set_exec_state(self, name: str, state: "ExecState") -> bool:
+        """Set the exec gate state for a session.
+
+        Returns True on success, False if session not found.
+        """
+        record = await self._store.get_session(name)
+        if record is None:
+            return False
+        record.metadata["exec_state"] = state.value
+        await self._store.save_session(record)
+        logger.info("Session %s exec_state set to %s", name, state.value)
+        return True
 
     async def kill(self, name: str) -> None:
         """Terminate a session and its processes."""

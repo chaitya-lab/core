@@ -505,7 +505,7 @@ class PipelineOrchestrator:
                 continue
 
             step_ctx = PipelineContext(
-                session_id=ctx.session_id,
+                session_id=cmd.args.get("session") or ctx.session_id,
                 input_stream=current_input,
                 env=dict(ctx.env),
                 dry_run=ctx.dry_run,
@@ -628,7 +628,7 @@ class PipelineOrchestrator:
                 continue
 
             step_ctx = PipelineContext(
-                session_id=ctx.session_id,
+                session_id=cmd.args.get("session") or ctx.session_id,
                 input_stream=current_input,
                 env=dict(ctx.env),
                 dry_run=ctx.dry_run,

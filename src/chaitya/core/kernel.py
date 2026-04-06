@@ -69,6 +69,7 @@ from chaitya.core.types import (
     KERNEL_STARTED,
     SESSION_RESUMED,
     SESSION_WAITING,
+    ExecState,
     AdapterLoadError,
     AdapterPermissions,
     ChaityaStream,
@@ -596,6 +597,36 @@ class Kernel:
         *,
         args: dict[str, Any] | None = None,
     ) -> tuple[bytes, int]:
+        is_dry_run = bool(ctx.env.get("dry-run"))
+        is_confirm = bool(ctx.env.get("confirm"))
+
+        if ctx.session_id:
+            exec_state = await self._session_mgr.get_exec_state(ctx.session_id)
+            if exec_state == ExecState.READONLY:
+                sub = ctx.env.get("__subcommand__", "")
+                return (
+                    f"[readonly] Session '{ctx.session_id}' is in readonly mode. "
+                    f"Execution blocked for '{name} {sub}'. "
+                    f"Use 'session exec enable {ctx.session_id}' to enable.\n".encode("utf-8"),
+                    1,
+                )
+            if exec_state == ExecState.DISABLED and not is_dry_run and not is_confirm:
+                sub = ctx.env.get("__subcommand__", "")
+                raw = ctx.env.get("__args__", [])
+                args_str = " ".join(str(a) for a in raw)
+                supports_dry = getattr(contract, "supports_dry_run", False)
+                if supports_dry:
+                    dry_hint = f"\n[dry-run] This command supports --dry-run for a preview."
+                else:
+                    dry_hint = ""
+                return (
+                    f"[dry-run] Session '{ctx.session_id}' exec is disabled.\n"
+                    f"  Would execute: {name} {sub} {args_str}\n"
+                    f"  Run 'session exec enable {ctx.session_id}' to enable execution."
+                    f"{dry_hint}\n".encode("utf-8"),
+                    0,
+                )
+
         sdk_perms = SdkAdapterPermissions(**permissions.__dict__)
         sdk_event_bus._configure(self._adapter_bus, name, sdk_perms)
         _configure_permissions(name, sdk_perms)
@@ -1095,12 +1126,42 @@ class Kernel:
             rec = await self._store.get_session(name)
             if rec is None:
                 return f"Session '{name}' not found.".encode(), 1
+            exec_state = rec.metadata.get("exec_state", "disabled")
             lines = [
                 f"Name: {rec.name}",
                 f"State: {rec.state.value}",
+                f"Exec: {exec_state}",
                 f"Created: {rec.created_at}",
             ]
             return "\n".join(lines).encode("utf-8"), 0
+
+        if sub == "exec":
+            action = positional[0] if positional else ""
+            name = ctx.env.get("name") or (positional[1] if len(positional) > 1 else "")
+            if action == "status":
+                if not name:
+                    return b"Usage: session exec status <name>", 1
+                state = await self._session_mgr.get_exec_state(name)
+                return f"Session '{name}' exec state: {state.value}\n".encode("utf-8"), 0
+            if action in ("enable", "disable", "readonly"):
+                if not name:
+                    return f"Usage: session exec {action} <name>".encode("utf-8"), 1
+                state_map = {
+                    "enable": ExecState.ENABLED,
+                    "disable": ExecState.DISABLED,
+                    "readonly": ExecState.READONLY,
+                }
+                ok = await self._session_mgr.set_exec_state(name, state_map[action])
+                if not ok:
+                    return f"Session '{name}' not found.".encode("utf-8"), 1
+                return f"Session '{name}' exec state set to {action}.\n".encode("utf-8"), 0
+            return (
+                b"Usage: session exec <enable|disable|readonly|status> <name>\n"
+                b"  enable   - allow commands to execute\n"
+                b"  disable  - dry-run only (default)\n"
+                b"  readonly - no execution, no dry-run\n"
+                b"  status   - show current exec state\n"
+            ), 1
 
         if sub == "create":
             name = ctx.env.get("name") or (positional[0] if positional else "")

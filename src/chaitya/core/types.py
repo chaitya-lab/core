@@ -40,6 +40,24 @@ class SessionState(enum.Enum):
     """Process has exited or pane is gone."""
 
 
+class ExecState(enum.Enum):
+    """Session execution gate state.
+
+    Controls whether commands execute or return dry-run info.
+    Stored in session metadata, persists across restarts.
+    """
+
+    DISABLED = "disabled"
+    """Default. Commands return dry-run info only. --dry-run is implicit."""
+
+    ENABLED = "enabled"
+    """Commands execute normally. Explicit --confirm flag required for
+    adapter-level confirmation gates."""
+
+    READONLY = "readonly"
+    """No execution at all. Even dry-run is blocked. Read-only session."""
+
+
 class InputType(enum.Enum):
     """Suspension input types (PRD §8)."""
 

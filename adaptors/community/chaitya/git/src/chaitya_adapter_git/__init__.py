@@ -2,7 +2,7 @@
 
 This adapter demonstrates the PassthroughCLI pattern from the SDK:
 - Declares ``"*"`` as the wildcard command
-- Blocks dangerous subcommands (push, reset --hard, clean -fd)
+- Blocks destructive subcommands (push, reset --hard, clean -fd) unless --confirm is passed
 - Passes everything else through to git via SessionRunner
 - Uses override handlers for specific subcommands when needed
 
@@ -12,10 +12,10 @@ Usage:
     chaitya git commit -m "fix"
     chaitya git log --oneline -5
 
-Blocked commands:
-    chaitya git push          # blocked: network safety
-    chaitya git reset --hard  # blocked: destructive
-    chaitya git clean -fd     # blocked: destructive
+Destructive commands (require --confirm to execute):
+    chaitya git push          # requires --confirm: network action
+    chaitya git reset --hard  # requires --confirm: destructive
+    chaitya git clean -fd     # requires --confirm: destructive
 """
 
 from __future__ import annotations
@@ -64,7 +64,7 @@ async def _handle_clone(ctx: SessionContext) -> tuple[bytes, int]:
 _git = PassthroughCLI(
     name="git",
     description="Wrapper for the git CLI. Passes subcommands through to git. "
-    "Destructive commands are blocked.",
+    "Destructive commands require --confirm to execute.",
     blocked=[
         "push",
         "push --force",
@@ -94,6 +94,21 @@ async def git_handler(
     stream: ChaityaStream,
     ctx: SessionContext,
 ) -> tuple[bytes, int]:
+    has_confirm = bool(ctx.args.get("confirm"))
+    blocked = _git.is_blocked(
+        str(ctx.args.get("subcommand", "*")),
+        list(ctx.args.get("__raw_args__", [])),
+    )
+    if blocked and not has_confirm:
+        sub = str(ctx.args.get("subcommand", ""))
+        raw = ctx.args.get("__raw_args__", [])
+        full_cmd = f"git {sub} {' '.join(str(a) for a in raw)}".strip()
+        return (
+            f"[confirm] This will execute: {full_cmd}\nRun with --confirm to proceed.\n".encode(
+                "utf-8"
+            ),
+            0,
+        )
     return await _git.passthrough(ctx)
 
 
