@@ -1044,9 +1044,10 @@ class Kernel:
         lines.append("  session signal <name> <signal>         Send signal (SIGTERM/SIGINT)")
         lines.append("  session kill <name>                   Kill a session")
         lines.append("")
-        lines.append("  watch --all                            Stream all events")
-        lines.append("  watch --session <name> [--on <type>]   Stream session events")
-        lines.append("  watch --search <query>                 Search event log")
+        lines.append("  watch --all                            Query history: all events")
+        lines.append("  watch --session <name> [--on <type>]   Query history: session events")
+        lines.append("  watch --search <query>                 Query history: full-text search")
+        lines.append("  watch --live --session <name>         Stream live events to stdout")
         lines.append("")
         lines.append("  input list                            List pending input requests")
         lines.append("  input respond <id> <value>            Respond to a suspended command")
@@ -1370,26 +1371,38 @@ class Kernel:
     async def _handle_watch(
         self, input_stream: ChaityaStream, ctx: PipelineContext
     ) -> tuple[bytes, int]:
-        """Handle ``watch <options>`` — subscribe to events.
+        """Handle ``watch <options>`` — query or stream events.
 
         PRD §5:
-            watch --session <name> [--on <event-type>] [--exit-after N]
-            watch --all [--on <event-type>]
-            watch --search <query> [--since <duration>]
+            watch --session <name> [--on <event-type>] [--exit-after N] [--limit N]
+            watch --all [--on <event-type>] [--exit-after N] [--limit N]
+            watch --search <query> [--since <duration>] [--limit N]
+            watch --live --session <name> [--on <event-type>] [--exit-after N] [--timeout N]
 
-        Streams JSON-lines on stdout. Pipeable to any adapter.
+        Default mode (no --live): query history, return JSON lines. Pipeable.
+        --live mode: stream events to stdout in real-time. Blocking.
         """
         import json
         from datetime import datetime, timedelta
 
+        is_live = bool(ctx.env.get("live"))
         search_query = ctx.env.get("search")
         session_id = ctx.env.get("session")
         exit_after = int(str(ctx.env.get("exit-after", "0")))
         limit = int(str(ctx.env.get("limit", "100")))
         since_str = ctx.env.get("since")
+        timeout_str = ctx.env.get("timeout", "0")
         event_types: list[str] | None = None
         if ctx.env.get("on"):
             event_types = [str(ctx.env["on"])]
+
+        if is_live:
+            return await self._watch_live(
+                session_id=str(session_id) if session_id else None,
+                event_types=event_types,
+                exit_after=exit_after,
+                timeout_seconds=int(timeout_str) if timeout_str else 0,
+            )
 
         if search_query:
             since_dt = None
@@ -1442,6 +1455,86 @@ class Kernel:
             }
             lines.append(json.dumps(event_dict, separators=(",", ":")))
         return "\n".join(lines).encode("utf-8"), 0
+
+    async def _watch_live(
+        self,
+        session_id: str | None,
+        event_types: list[str] | None,
+        exit_after: int,
+        timeout_seconds: int,
+    ) -> tuple[bytes, int]:
+        """Stream live events to stdout as JSON lines.
+
+        Writes directly to sys.stdout.buffer for real-time output.
+        Blocks until exit_after events are received, timeout expires,
+        or the kernel is shutting down.
+        """
+        import json
+
+        q: asyncio.Queue[Event | None] = asyncio.Queue()
+        count = 0
+        stop_reason = "timeout"
+
+        def _make_handler() -> Any:
+            async def _on_event(event: Event) -> None:
+                await q.put(event)
+
+            return _on_event
+
+        subscription = await self._event_bus.subscribe(
+            EventFilter(event_types=event_types, session_id=session_id),
+            _make_handler(),
+        )
+
+        async def _cleanup() -> None:
+            await self._event_bus.unsubscribe(subscription)
+
+        try:
+            while True:
+                try:
+                    if timeout_seconds > 0:
+                        ev = await asyncio.wait_for(q.get(), timeout=timeout_seconds)
+                    else:
+                        ev = await q.get()
+                except TimeoutError:
+                    stop_reason = "timeout"
+                    break
+
+                if ev is None:
+                    stop_reason = "stopped"
+                    break
+
+                event_dict = {
+                    "event_id": ev.event_id,
+                    "type": ev.type,
+                    "source_adapter": ev.source_adapter,
+                    "timestamp": ev.timestamp,
+                    "session_id": ev.session_id,
+                    "exit_code": ev.exit_code,
+                    "duration_ms": ev.duration_ms,
+                    "payload": ev.payload,
+                    "parent_event_id": ev.parent_event_id,
+                    "request_id": ev.request_id,
+                }
+                line = json.dumps(event_dict, separators=(",", ":"))
+                sys.stdout.buffer.write(line.encode("utf-8") + b"\n")
+                sys.stdout.buffer.flush()
+
+                count += 1
+                if exit_after > 0 and count >= exit_after:
+                    stop_reason = f"{count} events"
+                    break
+
+                if self._shutting_down:
+                    stop_reason = "kernel shutdown"
+                    break
+        finally:
+            await _cleanup()
+
+        return (
+            f"[watch --live] stopped ({stop_reason}), {count} event(s) streamed\n".encode(),
+            0,
+        )
 
     async def _handle_registry(
         self, input_stream: ChaityaStream, ctx: PipelineContext
