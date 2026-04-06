@@ -89,7 +89,7 @@ logger = logging.getLogger(__name__)
 KERNEL_COMMANDS = frozenset({"info", "session", "input", "output", "watch", "registry"})
 
 # System adapters whose load failure halts boot (PRD §3.6)
-DEFAULT_SYSTEM_ADAPTERS = frozenset({"file", "shell", "registry"})
+DEFAULT_SYSTEM_ADAPTERS = frozenset({"file", "shell", "route", "process", "registry"})
 
 
 class _AdapterEventBusBridge:
