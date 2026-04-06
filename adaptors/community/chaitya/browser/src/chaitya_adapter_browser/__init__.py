@@ -150,14 +150,20 @@ _browser_contract = {
                 },
                 {
                     "name": "value",
-                    "required": True,
+                    "required": False,
                     "description": "Text value to type into the field",
+                },
+                {
+                    "name": "input-file",
+                    "required": False,
+                    "description": "Read value from a file instead of --value",
                 },
             ],
             "examples": [
                 'chaitya browser fill --selector "#search-box" --value "hello world"',
                 'chaitya browser fill --label "Email" --value "test@example.com"',
                 'chaitya browser fill --name q --value "search term"',
+                'chaitya browser fill --selector "#file-upload" --input-file /tmp/data.txt',
             ],
         },
         {
@@ -567,9 +573,17 @@ async def _handle_fill(ctx: SessionContext) -> tuple[bytes, int]:
     label = str(ctx.args.get("label") or "")
     name = str(ctx.args.get("name") or "")
     value = str(ctx.args.get("value") or "")
+    input_file = str(ctx.args.get("input-file") or "")
+
+    if input_file:
+        try:
+            with open(input_file, "r", encoding="utf-8") as f:
+                value = f.read()
+        except OSError as exc:
+            return f"fill: cannot read --input-file {input_file}: {exc}\n".encode("utf-8"), 1
 
     if not value:
-        return b"fill: --value is required\n", 1
+        return b"fill: --value or --input-file is required\n", 1
     if not selector and not label and not name:
         return b"fill: one of --selector, --label, or --name is required\n", 1
 

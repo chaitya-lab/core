@@ -24,13 +24,14 @@ Usage::
 The runner handles:
   1. Creates session if it doesn't exist.
   2. Records current output length.
-  3. Sends input to the session PTY.
-  4. Polls output until a completion pattern matches or timeout fires.
-  5. Returns (new_output_since_start, elapsed_seconds).
-  6. Emits adapter.<action>_start and adapter.<action>_complete events.
+  3. Checks session state; applies on_busy_input policy.
+  4. Sends input to the session PTY.
+  5. Polls output until a completion pattern matches or timeout fires.
+  6. Returns (new_output_since_start, elapsed_seconds).
+  7. Emits adapter.<action>_start and adapter.<action>_complete events.
 
 Architecture note: this module accesses ``chaitya.core.kernel._instance``
-to get the kernel's SessionManager. The kernel sets this at startup.
+to get the kernel's SessionManager and registry. The kernel sets this at startup.
 This is the only entry point where the SDK reaches into kernel internals —
 everything else is purely through the SDK public API.
 """
@@ -188,8 +189,59 @@ class SessionRunner:
             await s_mgr.create(name=self.session_name, template=None)
 
     async def _send_input(self, kernel: Any, command: str) -> None:
+        await self._apply_busy_input_policy(kernel)
         data = f"{command}\n".encode()
         await kernel._session_mgr.send_input(self.session_name, data)
+
+    async def _apply_busy_input_policy(self, kernel: Any) -> None:
+        """Check session state and apply on_busy_input policy.
+
+        If session is BUSY, either wait (queue) or raise (reject) per
+        the adapter's contract. Falls back to queue if registry unavailable.
+        """
+        record = await kernel._session_mgr.status(self.session_name)
+        if record is None:
+            return
+
+        from chaitya.core.types import SessionState
+        from chaitya_sdk.types import BusyInputPolicy
+
+        if record.state != SessionState.BUSY:
+            return
+
+        policy = self._get_busy_input_policy(kernel)
+        if policy == BusyInputPolicy.REJECT:
+            raise RuntimeError(
+                f"Session '{self.session_name}' is busy. "
+                f"Adapter '{self.adapter_name}' has on_busy_input=reject. "
+                "Wait for the session to become idle and retry."
+            )
+
+        # Queue: wait for session to become non-BUSY
+        deadline = time.monotonic() + self.timeout
+        poll_interval = min(self.poll_interval, 2.0)
+        while time.monotonic() < deadline:
+            await asyncio.sleep(poll_interval)
+            record = await kernel._session_mgr.status(self.session_name)
+            if record is None or record.state != SessionState.BUSY:
+                return
+        raise RuntimeError(
+            f"Session '{self.session_name}' is busy and did not become idle "
+            f"within {self.timeout}s timeout."
+        )
+
+    def _get_busy_input_policy(self, kernel: Any) -> Any:
+        """Look up the adapter's on_busy_input policy from the registry."""
+        try:
+            registry = getattr(kernel, "_registry", None)
+            if registry is None:
+                return BusyInputPolicy.QUEUE
+            pkg = registry.get_adapter(self.adapter_name)
+            if pkg is None or pkg.contract is None:
+                return BusyInputPolicy.QUEUE
+            return getattr(pkg.contract, "on_busy_input", BusyInputPolicy.QUEUE)
+        except Exception:
+            return BusyInputPolicy.QUEUE
 
     async def _read_output(self, kernel: Any) -> str:
         output = await kernel._session_mgr.read_output(

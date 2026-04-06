@@ -251,8 +251,8 @@ class SessionManager:
         name: str,
         *,
         idle_timeout_seconds: float = 0.2,
-        max_chunks: int = 32,
-        max_bytes: int = 65_536,
+        max_chunks: int = 128,
+        max_bytes: int = 5_242_880,
     ) -> bytes:
         """Collect a bounded snapshot of session output.
 

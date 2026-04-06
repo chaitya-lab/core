@@ -8,6 +8,7 @@ Reference: PRD §3.5, §4, §13
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -437,6 +438,35 @@ class PipelineOrchestrator:
         """Remove an adapter handler."""
         self._handlers.pop(adapter, None)
 
+    def _get_resource_limits(self, adapter: str) -> Any:
+        """Look up resource_limits for an adapter from the registry."""
+        if self._registry is None:
+            from chaitya.core.types import ResourceLimits
+
+            return ResourceLimits()
+        pkg = self._registry.get_adapter(adapter)
+        if pkg is None or pkg.contract is None:
+            from chaitya.core.types import ResourceLimits
+
+            return ResourceLimits()
+        return pkg.contract.resource_limits
+
+    async def _invoke_with_limits(
+        self,
+        handler: AdapterHandler,
+        current_input: ChaityaStream,
+        step_ctx: PipelineContext,
+        limits: Any,
+    ) -> tuple[bytes, int]:
+        """Invoke a handler with timeout enforcement."""
+        timeout = limits.max_execution_seconds
+        if timeout and timeout > 0:
+            return await asyncio.wait_for(
+                handler(current_input, step_ctx),
+                timeout=timeout,
+            )
+        return await handler(current_input, step_ctx)
+
     def parse_chain(self, expression: str) -> CommandChain:
         """Parse a command expression into a structured chain."""
         return parse_chain(expression)
@@ -486,8 +516,22 @@ class PipelineOrchestrator:
             step_ctx.env["exit_code"] = str(last_exit_code)
             step_ctx.env.update(cmd.args)
 
+            limits = self._get_resource_limits(cmd.adapter)
+
             try:
-                output_bytes, exit_code = await handler(current_input, step_ctx)
+                output_bytes, exit_code = await self._invoke_with_limits(
+                    handler, current_input, step_ctx, limits
+                )
+            except asyncio.TimeoutError:
+                err_msg = (
+                    f"[error] {cmd.adapter}.{cmd.subcommand}: "
+                    f"execution exceeded {limits.max_execution_seconds}s timeout\n"
+                ).encode()
+                accumulated_stderr.extend(err_msg)
+                last_exit_code = 124
+                if operator in (PipelineOperator.AND, PipelineOperator.PIPE):
+                    break
+                continue
             except Exception as exc:
                 err_msg = f"Pipeline error in {cmd.adapter}.{cmd.subcommand}: {exc}"
                 logger.error(err_msg)
@@ -499,6 +543,19 @@ class PipelineOrchestrator:
                 continue
 
             last_exit_code = exit_code
+            if (
+                limits.max_output_bytes
+                and len(accumulated_stdout) + len(output_bytes) > limits.max_output_bytes
+            ):
+                err_msg = (
+                    f"[error] {cmd.adapter}.{cmd.subcommand}: "
+                    f"output exceeds {limits.max_output_bytes:,} byte limit\n"
+                ).encode()
+                accumulated_stderr.extend(err_msg)
+                last_exit_code = 1
+                if operator in (PipelineOperator.AND, PipelineOperator.PIPE):
+                    break
+                continue
             accumulated_stdout.extend(output_bytes)
 
             if operator == PipelineOperator.AND and exit_code != 0:
@@ -582,8 +639,23 @@ class PipelineOrchestrator:
             step_ctx.env["exit_code"] = str(last_exit_code)
             step_ctx.env.update(cmd.args)
 
+            limits = self._get_resource_limits(cmd.adapter)
+
             try:
-                output_bytes, exit_code = await handler(current_input, step_ctx)
+                output_bytes, exit_code = await self._invoke_with_limits(
+                    handler, current_input, step_ctx, limits
+                )
+            except asyncio.TimeoutError:
+                err_msg = (
+                    f"[error] {cmd.adapter}.{cmd.subcommand}: "
+                    f"execution exceeded {limits.max_execution_seconds}s timeout\n"
+                ).encode()
+                accumulated_stderr.extend(err_msg)
+                last_exit_code = 124
+                yield OutputChunk(data=err_msg, is_stderr=True)
+                if operator in (PipelineOperator.AND, PipelineOperator.PIPE):
+                    break
+                continue
             except Exception as exc:
                 err_msg = f"Pipeline error in {cmd.adapter}.{cmd.subcommand}: {exc}"
                 logger.error(err_msg)
@@ -591,6 +663,21 @@ class PipelineOrchestrator:
                 accumulated_stderr.extend(err_bytes)
                 last_exit_code = 1
                 yield OutputChunk(data=err_bytes, is_stderr=True)
+                if operator in (PipelineOperator.AND, PipelineOperator.PIPE):
+                    break
+                continue
+
+            if (
+                limits.max_output_bytes
+                and len(accumulated_stdout) + len(output_bytes) > limits.max_output_bytes
+            ):
+                err_msg = (
+                    f"[error] {cmd.adapter}.{cmd.subcommand}: "
+                    f"output exceeds {limits.max_output_bytes:,} byte limit\n"
+                ).encode()
+                accumulated_stderr.extend(err_msg)
+                last_exit_code = 1
+                yield OutputChunk(data=err_msg, is_stderr=True)
                 if operator in (PipelineOperator.AND, PipelineOperator.PIPE):
                     break
                 continue
