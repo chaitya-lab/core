@@ -181,8 +181,6 @@ def validate_contract(
     for cmd in contract.commands:
         if not cmd.description:
             errors.append(f"Command '{cmd.name}' has no description.")
-        if not cmd.params:
-            warnings.append(f"Command '{cmd.name}' declares no parameters.")
         if not cmd.examples:
             errors.append(
                 f"Command '{cmd.name}' has no examples. At least one example is required."

@@ -285,9 +285,9 @@ class TestDispatch:
         await kernel.boot()
         try:
             await kernel.dispatch("session create envloop")
-            set_env = await kernel.dispatch("session set-env envloop GREETING=hello")
+            set_env = await kernel.dispatch("session set-env envloop --key GREETING --value hello")
             assert set_env.exit_code == 0
-            await kernel.dispatch('session send-input envloop "echo $GREETING" --newline')
+            await kernel.dispatch('session send envloop --text "echo $GREETING" --newline')
             output = await kernel.dispatch("session output envloop")
             assert "hello" in output.processed
 

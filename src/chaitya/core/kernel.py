@@ -23,7 +23,10 @@ import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
 
 from chaitya_sdk.context import (
     _configure_permissions,
@@ -86,7 +89,7 @@ logger = logging.getLogger(__name__)
 KERNEL_COMMANDS = frozenset({"info", "session", "input", "output", "watch", "registry"})
 
 # System adapters whose load failure halts boot (PRD §3.6)
-DEFAULT_SYSTEM_ADAPTERS = frozenset({"file", "shell", "registry"})
+DEFAULT_SYSTEM_ADAPTERS = frozenset({"file", "shell", "route", "process", "registry"})
 
 
 class _AdapterEventBusBridge:
@@ -183,6 +186,8 @@ class Kernel:
         self._pending_inputs: dict[str, _PendingInputRequest] = {}
         self._input_timeout_seconds: int = input_timeout_seconds
         self._input_timeout_task: asyncio.Task[None] | None = None
+        self._route_action_sub: asyncio.Task[None] | None = None
+        self._subscriptions: dict[str, Any] = {}
 
         # --- Subsystem composition ---
         # Use provided event bus, or build one from config (default: SqliteEventBus)
@@ -247,6 +252,7 @@ class Kernel:
         if backend == "auto":
             if sys.platform == "win32":
                 from chaitya.core.backends.psmux import PsmuxBackend
+
                 return PsmuxBackend()
             else:
                 return TmuxSessionBackend()
@@ -254,6 +260,7 @@ class Kernel:
             return TmuxSessionBackend()
         if backend == "psmux":
             from chaitya.core.backends.psmux import PsmuxBackend  # type: ignore[import]
+
             return PsmuxBackend()
         raise ValueError(
             f"Unsupported session backend {session_backend!r}. Supported: auto (default), tmux, psmux."
@@ -388,6 +395,7 @@ class Kernel:
             self._register_kernel_handlers()
             self._register_loaded_adapter_handlers()
             await self._restore_pending_inputs()
+            self._register_event_subscribers()
             logger.info("Step 7/10: Kernel command handlers registered")
 
             # Step 8: Wire registry into SDK context
@@ -462,6 +470,15 @@ class Kernel:
                 except asyncio.CancelledError:
                     pass
                 self._input_timeout_task = None
+
+            # Cancel route action subscriber
+            if self._route_action_sub and not self._route_action_sub.done():
+                self._route_action_sub.cancel()
+                try:
+                    await self._route_action_sub
+                except asyncio.CancelledError:
+                    pass
+                self._route_action_sub = None
 
             # Stop session manager (cancels stuck monitor)
             await self._session_mgr.stop()
@@ -872,6 +889,39 @@ class Kernel:
             args=resumed_args,
         )
 
+    def _register_event_subscribers(self) -> None:
+        """Register kernel-level event bus subscribers.
+
+        These handle cross-cutting concerns that need to react to events
+        without going through adapter dispatch.
+        """
+        self._route_action_sub = asyncio.create_task(self._subscribe_route_action())
+
+    async def _subscribe_route_action(self) -> None:
+        """Subscribe to route.action_requested events and dispatch actions."""
+
+        async def _on_route_action(event: Any) -> None:
+            action = str(event.payload.get("action", ""))
+            matched = event.payload.get("matched_content", "")
+            if not action:
+                return
+            logger.info("[route --do] dispatching: %s", action)
+            try:
+                result = await self.dispatch(action)
+                logger.info(
+                    "[route --do] completed: %s (exit=%d)",
+                    action,
+                    result.exit_code,
+                )
+            except Exception as exc:
+                logger.error("[route --do] failed: %s — %s", action, exc)
+
+        sub = await self._event_bus.subscribe(
+            EventFilter(event_types=["route.action_requested"]),
+            _on_route_action,
+        )
+        self._subscriptions[sub.subscription_id] = sub
+
     async def _restore_pending_inputs(self) -> None:
         for item in await self._store.list_pending_inputs():
             package = self._registry.get_adapter(item["adapter_name"])
@@ -1036,17 +1086,18 @@ class Kernel:
         lines.append("  session attach <name>                  Attach to a session (tmux)")
         lines.append("  session detach <name>                  Detach from a session")
         lines.append("  session output <name>                  Read session output")
-        lines.append("  session send-input <name> <text>       Send input to session")
-        lines.append("  session send-input <name> --newline    Send newline only")
-        lines.append("  session send-input <name> --key <key> Send key (enter/tab/space)")
-        lines.append("  session set-env <name> KEY=VALUE      Set environment variable")
-        lines.append("  session unset-env <name> KEY           Unset environment variable")
+        lines.append("  session send <name> [--text <text>]    Send input to session")
+        lines.append("  session send <name> --newline           Send newline only")
+        lines.append("  session send <name> --key <key>         Send key (enter/tab/space)")
+        lines.append("  session set-env <name> --key <K> --value <V>  Set environment variable")
+        lines.append("  session unset-env <name> --key <K>     Unset environment variable")
         lines.append("  session signal <name> <signal>         Send signal (SIGTERM/SIGINT)")
         lines.append("  session kill <name>                   Kill a session")
         lines.append("")
-        lines.append("  watch --all                            Stream all events")
-        lines.append("  watch --session <name> [--on <type>]   Stream session events")
-        lines.append("  watch --search <query>                 Search event log")
+        lines.append("  watch --all                            Query history: all events")
+        lines.append("  watch --session <name> [--on <type>]   Query history: session events")
+        lines.append("  watch --search <query>                 Query history: full-text search")
+        lines.append("  watch --live --session <name>         Stream live events to stdout")
         lines.append("")
         lines.append("  input list                            List pending input requests")
         lines.append("  input respond <id> <value>            Respond to a suspended command")
@@ -1180,11 +1231,11 @@ class Kernel:
             except Exception as exc:
                 return str(exc).encode("utf-8"), 1
 
-        if sub == "send-input":
+        if sub in ("send", "send-input"):
             name = ctx.env.get("name") or (positional[0] if positional else "")
             if not name:
-                return b"Usage: session send-input <name> <text>|--newline|--key <key>", 1
-            raw_text = positional[1] if len(positional) > 1 else ""
+                return b"Usage: session send <name> [--text <text>] [--newline] [--key <key>]", 1
+            text = str(ctx.env.get("text", "") or (positional[1] if len(positional) > 1 else ""))
             newline = bool(ctx.env.get("newline"))
             key = str(ctx.env.get("key", "")).lower()
             if key:
@@ -1198,7 +1249,7 @@ class Kernel:
                 if data is None:
                     return f"Unsupported key: {key}".encode(), 1
             else:
-                data = raw_text.encode("utf-8")
+                data = text.encode("utf-8")
                 if newline:
                     data += b"\n"
             try:
@@ -1258,10 +1309,10 @@ class Kernel:
 
         if sub == "set-env":
             name = ctx.env.get("name") or (positional[0] if positional else "")
-            pair = positional[1] if len(positional) > 1 else ""
-            if not name or "=" not in pair:
-                return b"Usage: session set-env <name> KEY=VALUE", 1
-            key, value = pair.split("=", 1)
+            key = str(ctx.env.get("key", "") or (positional[1] if len(positional) > 1 else ""))
+            value = str(ctx.env.get("value", ""))
+            if not name or not key:
+                return b"Usage: session set-env <name> --key <KEY> --value <VALUE>", 1
             try:
                 await self._session_mgr.set_env(name, key, value)
                 return f"Environment set for session '{name}': {key}".encode(), 0
@@ -1270,9 +1321,9 @@ class Kernel:
 
         if sub == "unset-env":
             name = ctx.env.get("name") or (positional[0] if positional else "")
-            key = positional[1] if len(positional) > 1 else ""
+            key = str(ctx.env.get("key", "") or (positional[1] if len(positional) > 1 else ""))
             if not name or not key:
-                return b"Usage: session unset-env <name> KEY", 1
+                return b"Usage: session unset-env <name> --key <KEY>", 1
             try:
                 await self._session_mgr.unset_env(name, key)
                 return f"Environment removed for session '{name}': {key}".encode(), 0
@@ -1369,27 +1420,40 @@ class Kernel:
 
     async def _handle_watch(
         self, input_stream: ChaityaStream, ctx: PipelineContext
-    ) -> tuple[bytes, int]:
-        """Handle ``watch <options>`` — subscribe to events.
+    ) -> tuple[bytes, int] | AsyncIterator[bytes]:
+        """Handle ``watch <options>`` — query or stream events.
 
         PRD §5:
-            watch --session <name> [--on <event-type>] [--exit-after N]
-            watch --all [--on <event-type>]
-            watch --search <query> [--since <duration>]
+            watch --session <name> [--on <event-type>] [--exit-after N] [--limit N]
+            watch --all [--on <event-type>] [--exit-after N] [--limit N]
+            watch --search <query> [--since <duration>] [--limit N]
+            watch --live --session <name> [--on <event-type>] [--exit-after N] [--timeout N]
 
-        Streams JSON-lines on stdout. Pipeable to any adapter.
+        Default mode (no --live): query history, return JSON lines. Pipeable.
+        --live mode: streams events as JSON lines (AsyncIterator[bytes]).
+        Chunks are yielded in real-time and flow through the pipeline for piping.
         """
         import json
         from datetime import datetime, timedelta
 
+        is_live = bool(ctx.env.get("live"))
         search_query = ctx.env.get("search")
         session_id = ctx.env.get("session")
         exit_after = int(str(ctx.env.get("exit-after", "0")))
         limit = int(str(ctx.env.get("limit", "100")))
         since_str = ctx.env.get("since")
+        timeout_str = ctx.env.get("timeout", "0")
         event_types: list[str] | None = None
         if ctx.env.get("on"):
             event_types = [str(ctx.env["on"])]
+
+        if is_live:
+            return self._watch_live(
+                session_id=str(session_id) if session_id else None,
+                event_types=event_types,
+                exit_after=exit_after,
+                timeout_seconds=int(timeout_str) if timeout_str else 0,
+            )
 
         if search_query:
             since_dt = None
@@ -1442,6 +1506,79 @@ class Kernel:
             }
             lines.append(json.dumps(event_dict, separators=(",", ":")))
         return "\n".join(lines).encode("utf-8"), 0
+
+    async def _watch_live(
+        self,
+        session_id: str | None,
+        event_types: list[str] | None,
+        exit_after: int,
+        timeout_seconds: int,
+    ) -> AsyncIterator[bytes]:
+        """Stream live events as JSON line chunks.
+
+        Async generator. Each yield is one event as a JSON line.
+        When piped through the pipeline, chunks arrive in real-time.
+        The pipeline's _handle_result accumulates all chunks for the final
+        L2 output while yielding them for piping.
+
+        Blocks until exit_after events are received, timeout expires,
+        or the kernel is shutting down.
+        """
+        import json
+
+        q: asyncio.Queue[Event | None] = asyncio.Queue()
+        count = 0
+
+        def _make_handler() -> Any:
+            async def _on_event(event: Event) -> None:
+                await q.put(event)
+
+            return _on_event
+
+        subscription = await self._event_bus.subscribe(
+            EventFilter(event_types=event_types, session_id=session_id),
+            _make_handler(),
+        )
+
+        async def _cleanup() -> None:
+            await self._event_bus.unsubscribe(subscription)
+
+        try:
+            while True:
+                try:
+                    if timeout_seconds > 0:
+                        ev = await asyncio.wait_for(q.get(), timeout=timeout_seconds)
+                    else:
+                        ev = await q.get()
+                except TimeoutError:
+                    break
+
+                if ev is None:
+                    break
+
+                event_dict = {
+                    "event_id": ev.event_id,
+                    "type": ev.type,
+                    "source_adapter": ev.source_adapter,
+                    "timestamp": ev.timestamp,
+                    "session_id": ev.session_id,
+                    "exit_code": ev.exit_code,
+                    "duration_ms": ev.duration_ms,
+                    "payload": ev.payload,
+                    "parent_event_id": ev.parent_event_id,
+                    "request_id": ev.request_id,
+                }
+                line = json.dumps(event_dict, separators=((",", ":")))
+                yield (line + "\n").encode("utf-8")
+
+                count += 1
+                if exit_after > 0 and count >= exit_after:
+                    break
+
+                if self._shutting_down:
+                    break
+        finally:
+            await _cleanup()
 
     async def _handle_registry(
         self, input_stream: ChaityaStream, ctx: PipelineContext

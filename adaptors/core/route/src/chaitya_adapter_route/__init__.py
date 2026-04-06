@@ -2,6 +2,7 @@
 
 Provides L1 conditional filtering: inspects input stream and
 decides whether to pass it through, modify it, or drop it.
+When --do is specified, dispatches an action command when conditions match.
 
 Design (PRD §3.5):
   - Conditional routing is NOT in the pipeline orchestrator.
@@ -14,18 +15,22 @@ Usage:
   chaitya route --if-type <mime>         # pass only if declared type matches
   chaitya route --if-blank               # pass only if content is empty
   chaitya route --unless-pattern <regex> # pass only if content does NOT match
+  chaitya route --if-pattern <regex> --do "<command>"  # dispatch action on match
 
 Pipeline examples:
   chaitya file read log.txt | chaitya route --if-pattern "ERROR" | chaitya shell run --command "cat"
   chaitya shell run --command "make" | chaitya route --if-exit 0 | chaitya shell run --command "notify-send success"
+  chaitya watch --live --session my-session | chaitya route --if-pattern "ERROR" --do "session send-input alert-session 'notify-send Error!'"
 """
 
 from __future__ import annotations
 
 import re
+import sys
 from dataclasses import asdict
 
-from chaitya_sdk import ChaityaStream, SessionContext, adapter
+from chaitya_sdk import ChaityaStream, SessionContext, adapter, event_bus
+from chaitya_sdk.types import Event
 
 
 def _match_pattern(content: bytes, pattern: str) -> bool:
@@ -35,13 +40,13 @@ def _match_pattern(content: bytes, pattern: str) -> bool:
         return False
 
 
-@adapter(
-    name="route",
-    description="Conditional pipeline routing: filter content based on exit code, pattern, or type.",
-    commands=[
+_ROUTE_CONTRACT = {
+    "name": "route",
+    "description": "Conditional pipeline routing: filter content and trigger actions based on patterns.",
+    "commands": [
         {
             "name": "check",
-            "description": "Evaluate conditions on input stream, pass content if conditions match.",
+            "description": "Evaluate conditions on input stream, pass content if conditions match. Optionally dispatch an action when conditions match.",
             "params": [
                 {
                     "name": "if-exit",
@@ -78,6 +83,11 @@ def _match_pattern(content: bytes, pattern: str) -> bool:
                     "required": False,
                     "description": "Invert the condition: pass content that would be dropped",
                 },
+                {
+                    "name": "do",
+                    "required": False,
+                    "description": "Command to dispatch when condition matches (e.g. 'session send-input my-session notify')",
+                },
             ],
             "examples": [
                 "chaitya route --if-exit 0",
@@ -85,11 +95,20 @@ def _match_pattern(content: bytes, pattern: str) -> bool:
                 "chaitya route --unless-pattern 'debug'",
                 "chaitya route --if-type text/plain",
                 "chaitya route --inverse --if-exit 0",
+                "chaitya route --if-pattern 'ERROR' --do 'session send-input alert-session notify!'",
             ],
         },
     ],
-    permissions={"fs_read": ["."], "fs_write": [], "network": False},
-)
+    "permissions": {
+        "fs_read": ["."],
+        "fs_write": ["/tmp"],
+        "network": False,
+        "can_emit_events": True,
+    },
+}
+
+
+@adapter(**_ROUTE_CONTRACT)  # type: ignore[arg-type]
 async def route_handler(
     stream: ChaityaStream,
     ctx: SessionContext,
@@ -114,19 +133,20 @@ async def route_handler(
     if_type = args.get("if-type")
     if_blank = args.get("if-blank")
     inverse = args.get("inverse")
+    do_action = args.get("do")
 
     passed = True
 
     if if_exit_raw is not None:
         try:
             expected = int(if_exit_raw)
-            last_code = int(str(ctx.args.get("exit_code", "0")))
+            last_code = int(str(args.get("exit_code", "0")))
             passed = passed and (last_code == expected)
         except (ValueError, TypeError):
             return f"[error] route: --if-exit requires an integer, got: {if_exit_raw}\n".encode(), 1
 
     if if_exit_nonzero:
-        last_code = int(str(ctx.args.get("exit_code", "0")))
+        last_code = int(str(args.get("exit_code", "0")))
         passed = passed and (last_code != 0)
 
     if if_pattern:
@@ -144,6 +164,19 @@ async def route_handler(
 
     if inverse:
         passed = not passed
+
+    if passed and do_action:
+        await event_bus.emit(
+            Event(
+                type="route.action_requested",
+                source_adapter="route",
+                session_id=ctx.session_id,
+                payload={
+                    "action": str(do_action),
+                    "matched_content": content.decode("utf-8", errors="replace")[:500],
+                },
+            )
+        )
 
     if passed:
         return content, 0

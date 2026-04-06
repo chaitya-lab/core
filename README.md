@@ -52,8 +52,9 @@ chaitya info
 Current status:
 - macOS/Linux: uses `tmux` backend by default
 - Windows: uses `psmux` backend by default (auto-detected)
+- Sessions are persistent named environments with PTY support
 
-The repository also ships first-party workspace adaptors for `file` and `shell`. They are discovered directly from `adaptors/core/` during development, so the kernel can boot and execute real adaptor commands from the repo without extra packaging steps.
+The repository ships first-party workspace adaptors for `file`, `shell`, `route`, `process`, and `test`. They are discovered directly from `adaptors/core/` during development, so the kernel can boot and execute real adaptor commands from the repo without extra packaging steps.
 
 External projects can add custom adaptors in two ways:
 

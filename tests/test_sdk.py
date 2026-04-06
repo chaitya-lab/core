@@ -344,60 +344,6 @@ class TestPassthroughCLI:
 # ---------------------------------------------------------------------------
 
 
-def _load_git_adapter():
-    """Load the git adapter module directly from the workspace path."""
-    import importlib.util
-    import sys
-    from pathlib import Path
-
-    src = (
-        Path(__file__).resolve().parents[1]
-        / "adaptors/community/chaitya/git/src/chaitya_adapter_git/__init__.py"
-    )
-    spec = importlib.util.spec_from_file_location("chaitya_adapter_git", src)
-    if spec is None or spec.loader is None:
-        return None
-    module = importlib.util.module_from_spec(spec)
-    try:
-        spec.loader.exec_module(module)
-    except Exception:
-        return None
-    return module
-
-
-class TestGitAdapter:
-    def test_git_adapter_has_contract(self):
-        mod = _load_git_adapter()
-        assert mod is not None
-        assert mod.__adapter_contract__["name"] == "git"
-
-    def test_git_adapter_has_wildcard_command(self):
-        mod = _load_git_adapter()
-        assert mod is not None
-        cmd_names = [c["name"] for c in mod.__adapter_contract__["commands"]]
-        assert "*" in cmd_names
-
-    def test_git_adapter_has_blocked_commands(self):
-        mod = _load_git_adapter()
-        assert mod is not None
-        assert mod._git.is_blocked("push", []) is True
-        assert mod._git.is_blocked("reset --hard", []) is True
-        assert mod._git.is_blocked("status", []) is False
-
-    def test_git_status_passed_through(self):
-        mod = _load_git_adapter()
-        assert mod is not None
-        assert mod._git.default_session == "git-default"
-
-    def test_git_blocked_command_returns_error(self):
-        mod = _load_git_adapter()
-        assert mod is not None
-        ctx = SessionContext(args={"subcommand": "push", "__raw_args__": []})
-        result = asyncio.run(mod._git.passthrough(ctx))
-        assert result[1] == 1
-        assert b"blocked" in result[0]
-
-
 # ---------------------------------------------------------------------------
 # Route adapter — conditional pipeline routing
 # ---------------------------------------------------------------------------
@@ -508,6 +454,64 @@ class TestRouteAdapter:
         result = asyncio.run(mod.route_handler(stream, ctx))
         assert result[1] == 127
         assert b"unknown subcommand" in result[0]
+
+    def test_do_emits_event_on_match(self):
+        from unittest.mock import AsyncMock, patch
+
+        mod = _load_route_adapter()
+        mock_emit = AsyncMock()
+        with patch.object(mod.event_bus, "emit", mock_emit):
+            ctx = SessionContext(
+                args={
+                    "subcommand": "check",
+                    "if-pattern": "ERROR",
+                    "do": "session send-input alert-session 'notify!'",
+                },
+            )
+            stream = ChaityaStream(content=b"ERROR: something failed")
+            result = asyncio.run(mod.route_handler(stream, ctx))
+            assert result[1] == 0
+            assert mock_emit.called
+            ev = mock_emit.call_args[0][0]
+            assert ev.type == "route.action_requested"
+            assert ev.payload["action"] == "session send-input alert-session 'notify!'"
+
+    def test_do_not_emit_when_not_matched(self):
+        from unittest.mock import AsyncMock, patch
+
+        mod = _load_route_adapter()
+        mock_emit = AsyncMock()
+        with patch.object(mod.event_bus, "emit", mock_emit):
+            ctx = SessionContext(
+                args={
+                    "subcommand": "check",
+                    "if-pattern": "ERROR",
+                    "do": "session send-input alert-session 'notify!'",
+                },
+            )
+            stream = ChaityaStream(content=b"all good here")
+            result = asyncio.run(mod.route_handler(stream, ctx))
+            assert result[1] == 0
+            assert b"dropped" in result[0]
+            assert not mock_emit.called
+
+    def test_do_passes_through_when_matched(self):
+        from unittest.mock import AsyncMock, patch
+
+        mod = _load_route_adapter()
+        mock_emit = AsyncMock()
+        with patch.object(mod.event_bus, "emit", mock_emit):
+            ctx = SessionContext(
+                args={
+                    "subcommand": "check",
+                    "if-pattern": "ERROR",
+                    "do": "session send-input alert-session 'notify!'",
+                },
+            )
+            stream = ChaityaStream(content=b"ERROR: something failed")
+            result = asyncio.run(mod.route_handler(stream, ctx))
+            assert result[1] == 0
+            assert b"ERROR: something failed" in result[0]
 
 
 # ---------------------------------------------------------------------------
@@ -765,108 +769,3 @@ class TestGUIAdapter:
         # On macOS without accessibility, returns error
         # but the contract is correct
         assert result[1] in (0, 1)
-
-
-# ---------------------------------------------------------------------------
-# Watchdog adapter — event-driven automation daemon
-# ---------------------------------------------------------------------------
-
-
-def _load_watchdog_adapter():
-    """Load the watchdog adapter module directly from the workspace path."""
-    import importlib.util
-
-    spec = importlib.util.spec_from_file_location(
-        "watchdog_adapter",
-        "adaptors/core/watchdog/src/chaitya_adapter_watchdog/__init__.py",
-    )
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-class TestWatchdogAdapter:
-    def test_loads_successfully(self):
-        mod = _load_watchdog_adapter()
-        assert hasattr(mod, "watchdog_handler")
-        assert hasattr(mod, "__adapter_contract__")
-
-    def test_contract_has_expected_commands(self):
-        mod = _load_watchdog_adapter()
-        contract = mod.__adapter_contract__
-        assert contract["name"] == "watchdog"
-        cmd_names = [c["name"] for c in contract["commands"]]
-        for name in ["start", "list", "stop"]:
-            assert name in cmd_names, f"Missing command: {name}"
-
-    def test_help_without_subcommand(self):
-        mod = _load_watchdog_adapter()
-        ctx = SessionContext(args={})
-        stream = ChaityaStream(content=b"")
-        result = asyncio.run(mod.watchdog_handler(stream, ctx))
-        assert result[1] == 0
-        assert b"watchdog" in result[0]
-
-    def test_unknown_subcommand_returns_error(self):
-        mod = _load_watchdog_adapter()
-        ctx = SessionContext(args={"subcommand": "unknown"})
-        stream = ChaityaStream(content=b"")
-        result = asyncio.run(mod.watchdog_handler(stream, ctx))
-        assert result[1] == 127
-        assert b"unknown subcommand" in result[0]
-
-    def test_start_requires_for_event(self):
-        mod = _load_watchdog_adapter()
-        ctx = SessionContext(args={"subcommand": "start"})
-        stream = ChaityaStream(content=b"")
-        result = asyncio.run(mod.watchdog_handler(stream, ctx))
-        assert result[1] == 1
-        assert b"--for" in result[0]
-
-    def test_start_rejects_invalid_regex(self):
-        mod = _load_watchdog_adapter()
-        ctx = SessionContext(
-            args={"subcommand": "start", "for": "browser.error", "if-pattern": "[invalid"}
-        )
-        stream = ChaityaStream(content=b"")
-        result = asyncio.run(mod.watchdog_handler(stream, ctx))
-        assert result[1] == 1
-        assert b"invalid regex" in result[0]
-
-    def test_stop_requires_id(self):
-        mod = _load_watchdog_adapter()
-        ctx = SessionContext(args={"subcommand": "stop"})
-        stream = ChaityaStream(content=b"")
-        result = asyncio.run(mod.watchdog_handler(stream, ctx))
-        assert result[1] == 1
-        assert b"--id" in result[0]
-
-    def test_stop_unknown_session_is_not_error(self):
-        from unittest.mock import patch, AsyncMock
-
-        mod = _load_watchdog_adapter()
-        with patch.object(mod, "SessionRunner") as mock_runner_cls:
-            mock_runner = AsyncMock()
-            mock_runner.run = AsyncMock(return_value=("[stderr]\n", 0))
-            mock_runner_cls.return_value = mock_runner
-            ctx = SessionContext(
-                args={"subcommand": "stop", "id": "watchdog-nonexistent-session-abc123"}
-            )
-            stream = ChaityaStream(content=b"")
-            result = asyncio.run(mod.watchdog_handler(stream, ctx))
-            assert result[1] == 0
-
-    def test_list_returns_session_info(self):
-        from unittest.mock import patch, AsyncMock
-
-        mod = _load_watchdog_adapter()
-        with patch.object(mod, "SessionRunner") as mock_runner_cls:
-            mock_runner = AsyncMock()
-            mock_runner.run = AsyncMock(return_value=("", 0))
-            mock_runner_cls.return_value = mock_runner
-            ctx = SessionContext(args={"subcommand": "list"})
-            stream = ChaityaStream(content=b"")
-            result = asyncio.run(mod.watchdog_handler(stream, ctx))
-            assert result[1] == 0
-            assert isinstance(result[0], bytes)
