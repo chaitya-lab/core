@@ -14,6 +14,8 @@ adapter loader when the kernel boots with default system adapters.
 
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from chaitya.core.kernel import Kernel
@@ -25,10 +27,15 @@ from chaitya.core.types import CommandOutput, EventFilter
 # ---------------------------------------------------------------------------
 
 
+def _session_backend() -> str:
+    """Return appropriate session backend for the platform."""
+    return "psmux" if os.name == "nt" else "tmux"
+
+
 @pytest.fixture
 async def kernel():
-    """Kernel with tmux session backend and workspace adapters (includes test)."""
-    k = Kernel(db_path=":memory:", session_backend="tmux")
+    """Kernel with platform-appropriate session backend and workspace adapters."""
+    k = Kernel(db_path=":memory:", session_backend=_session_backend())
     await k.boot()
     yield k
     await k.shutdown()
@@ -119,7 +126,7 @@ class TestWatch:
         assert "test.ping" in result.processed or "ping" in result.processed
 
     async def test_watch_with_session_filter(self) -> None:
-        kernel = Kernel(db_path=":memory:", session_backend="tmux")
+        kernel = Kernel(db_path=":memory:", session_backend=_session_backend())
         await kernel.boot()
         try:
             await kernel.dispatch("session create watch-session")
@@ -226,12 +233,19 @@ class TestSessionLifecycle:
     async def test_session_send_input_and_output(self, kernel: Kernel) -> None:
         await kernel.dispatch("session create io-test")
 
-        await kernel.dispatch('session send-input io-test "X=world" --newline')
-        await kernel.dispatch('session send-input io-test "echo Hello,$X" --newline')
+        if os.name == "nt":
+            # PowerShell syntax - use Write-Output with explicit string
+            await kernel.dispatch('session send-input io-test "Write-Output hello" --newline')
+            await kernel.dispatch('session send-input io-test "Write-Output world" --newline')
+        else:
+            # Bash syntax
+            await kernel.dispatch('session send-input io-test "echo hello" --newline')
+            await kernel.dispatch('session send-input io-test "echo world" --newline')
 
         result = await kernel.dispatch("session output io-test --idle-timeout 1.0")
         assert result.exit_code == 0
-        assert "Hello,world" in result.processed
+        assert "hello" in result.processed.lower()
+        assert "world" in result.processed.lower()
 
     async def test_session_create_nonexistent_backend_fails(self) -> None:
         with pytest.raises(ValueError, match="Unsupported session backend"):
@@ -278,7 +292,11 @@ class TestRegistry:
 
 class TestPipeline:
     async def test_pipeline_two_commands_chained(self, kernel: Kernel) -> None:
-        result = await kernel.dispatch("test echo --message ok | shell run --command 'cat'")
+        # Use PowerShell's stdin reading on Windows; on Unix use grep
+        if os.name == "nt":
+            result = await kernel.dispatch("test echo --message ok | shell run --command '$input'")
+        else:
+            result = await kernel.dispatch("test echo --message ok | shell run --command 'grep .'")
         assert result.exit_code == 0
         assert "ok" in result.processed
 

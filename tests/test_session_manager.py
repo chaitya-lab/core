@@ -1,4 +1,4 @@
-"""Tests for chaitya.core.session_manager using the TmuxSessionBackend.
+"""Tests for chaitya.core.session_manager using the appropriate session backend.
 
 Reference: PRD §3.3
 """
@@ -7,11 +7,14 @@ from __future__ import annotations
 
 import asyncio
 import os
+import shutil
 
 import pytest
 
+from chaitya.core.backends.psmux import PsmuxBackend
 from chaitya.core.backends.tmux import TmuxSessionBackend
 from chaitya.core.event_bus import SqliteEventBus
+from chaitya.core.protocols import SessionBackend
 from chaitya.core.session_manager import SessionManager
 from chaitya.core.store import SqliteStore
 from chaitya.core.types import (
@@ -26,16 +29,22 @@ from chaitya.core.types import (
 )
 
 
-def _tmux_available() -> bool:
-    import shutil
-
+def _backend_available() -> bool:
+    if os.name == "nt":
+        return shutil.which("psmux") is not None
     return shutil.which("tmux") is not None
 
 
-# Skip all tests if tmux is not available
+def _make_backend() -> SessionBackend:
+    if os.name == "nt":
+        return PsmuxBackend()
+    return TmuxSessionBackend()
+
+
+# Skip all tests if the appropriate backend is not available
 pytestmark = pytest.mark.skipif(
-    not _tmux_available(),
-    reason="tmux not available",
+    not _backend_available(),
+    reason="session backend not available",
 )
 
 
@@ -53,8 +62,8 @@ async def store() -> SqliteStore:
 
 
 @pytest.fixture
-def backend() -> TmuxSessionBackend:
-    return TmuxSessionBackend()
+def backend() -> SessionBackend:
+    return _make_backend()
 
 
 @pytest.fixture
@@ -176,7 +185,7 @@ class TestSessionManager:
         # Pre-populate store with a session record (no actual tmux pane)
         await store.save_session(SessionRecord(name="ghost", state=SessionState.IDLE))
         # Fresh backend (no sessions) + fresh manager
-        backend = TmuxSessionBackend()
+        backend = _make_backend()
         mgr = SessionManager(backend, store, bus)
         await mgr.start()
         record = await store.get_session("ghost")

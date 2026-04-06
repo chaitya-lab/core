@@ -28,13 +28,15 @@ def _default_session_backend_name() -> str:
     Priority:
       - macOS/Linux with tmux → "tmux"
       - Windows with psmux    → "psmux"
-      - fallback              → "local"
+      - fallback              → "tmux" (will fail with clear error if not installed)
     """
     if os.name != "nt" and shutil.which("tmux"):
         return "tmux"
     if os.name == "nt" and (shutil.which("psmux") or shutil.which("pmux")):
         return "psmux"
-    return "local"
+    if os.name != "nt":
+        return "tmux"
+    return "psmux"
 
 
 # ---------------------------------------------------------------------------

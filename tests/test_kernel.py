@@ -25,6 +25,11 @@ from chaitya.core.types import (
 )
 
 
+def _session_backend() -> str:
+    """Return appropriate session backend for the platform."""
+    return "psmux" if os.name == "nt" else "tmux"
+
+
 def _make_mock_registry_adapter() -> AdapterPackage:
     """Build a mock registry adapter package for tests.
 
@@ -222,7 +227,7 @@ class TestDispatch:
         )
 
     async def test_dispatch_workspace_shell_adapter(self) -> None:
-        kernel = Kernel(db_path=":memory:", session_backend="tmux")
+        kernel = Kernel(db_path=":memory:", session_backend=_session_backend())
         await kernel.boot()
         try:
             command = "Write-Output hello" if os.name == "nt" else "printf hello"
@@ -248,7 +253,7 @@ class TestDispatch:
     async def test_session_send_input_and_output_roundtrip(self) -> None:
         kernel = Kernel(
             db_path=":memory:",
-            session_backend="tmux",
+            session_backend=_session_backend(),
             system_adapters=frozenset(),
         )
         await kernel.boot()
@@ -274,7 +279,7 @@ class TestDispatch:
     async def test_session_set_env_and_watch(self) -> None:
         kernel = Kernel(
             db_path=":memory:",
-            session_backend="tmux",
+            session_backend=_session_backend(),
             system_adapters=frozenset(),
         )
         await kernel.boot()

@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
+import sys
 import time
 import uuid
 from dataclasses import dataclass
@@ -160,7 +161,7 @@ class Kernel:
         config: CoreConfig | None = None,
         db_path: str | Path = ":memory:",
         cli_name: str = "chaitya",
-        session_backend: str = "tmux",
+        session_backend: str = "auto",
         adapter_search_paths: list[str] | None = None,
         enabled_adapters: list[str] | None = None,
         disabled_adapters: list[str] | None = None,
@@ -243,14 +244,19 @@ class Kernel:
     @staticmethod
     def _build_session_backend(session_backend: str) -> Any:
         backend = session_backend.strip().lower()
+        if backend == "auto":
+            if sys.platform == "win32":
+                from chaitya.core.backends.psmux import PsmuxBackend
+                return PsmuxBackend()
+            else:
+                return TmuxSessionBackend()
         if backend == "tmux":
             return TmuxSessionBackend()
         if backend == "psmux":
             from chaitya.core.backends.psmux import PsmuxBackend  # type: ignore[import]
-
             return PsmuxBackend()
         raise ValueError(
-            f"Unsupported session backend {session_backend!r}. Supported backends: tmux, psmux."
+            f"Unsupported session backend {session_backend!r}. Supported: auto (default), tmux, psmux."
         )
 
     @staticmethod
