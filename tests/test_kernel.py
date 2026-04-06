@@ -235,7 +235,7 @@ class TestDispatch:
         file_path = tmp_path / "note.txt"
         try:
             write = await kernel.dispatch(f"file write --path {file_path} --text hello")
-            assert write.exit_code == 0
+            assert write.exit_code == 0, f"write failed: {write.processed}"
             read = await kernel.dispatch(f"file read --path {file_path}")
             assert read.exit_code == 0
             assert "hello" in read.processed

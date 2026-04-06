@@ -24,7 +24,10 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from chaitya_sdk.context import event_bus as sdk_event_bus
+from chaitya_sdk.context import (
+    _configure_permissions,
+    event_bus as sdk_event_bus,
+)
 from chaitya_sdk.context import registry_proxy
 from chaitya_sdk.types import (
     AdapterPermissions as SdkAdapterPermissions,
@@ -65,6 +68,7 @@ from chaitya.core.types import (
     KERNEL_SHUTTING_DOWN,
     KERNEL_STARTED,
     SESSION_RESUMED,
+    SESSION_WAITING,
     AdapterLoadError,
     AdapterPermissions,
     ChaityaStream,
@@ -592,11 +596,9 @@ class Kernel:
         *,
         args: dict[str, Any] | None = None,
     ) -> tuple[bytes, int]:
-        sdk_event_bus._configure(
-            self._adapter_bus,
-            name,
-            SdkAdapterPermissions(**permissions.__dict__),
-        )
+        sdk_perms = SdkAdapterPermissions(**permissions.__dict__)
+        sdk_event_bus._configure(self._adapter_bus, name, sdk_perms)
+        _configure_permissions(name, sdk_perms)
         sdk_stream = SdkChaityaStream(
             content=input_stream.content,
             declared_type=input_stream.declared_type,
@@ -689,6 +691,18 @@ class Kernel:
                     await self._session_mgr.update_state(ctx.session_id, SessionState.WAITING)
                 except Exception:
                     pass
+            await self._event_bus.emit(
+                Event(
+                    type=SESSION_WAITING,
+                    source_adapter=name,
+                    session_id=ctx.session_id,
+                    payload={
+                        "name": suspension.spec.name,
+                        "prompt": suspension.spec.prompt,
+                        "request_id": request_id,
+                    },
+                )
+            )
             await self._event_bus.emit(
                 Event(
                     type=INPUT_REQUESTED,

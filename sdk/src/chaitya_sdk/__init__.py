@@ -21,7 +21,13 @@ __version__ = "0.1.0a1"
 
 # --- Public API surface (PRD §10) ---
 
-from chaitya_sdk.context import event_bus, registry_proxy  # noqa: F401
+from chaitya_sdk.context import (  # noqa: F401
+    check_fs_read,
+    check_fs_write,
+    check_network,
+    event_bus,
+    registry_proxy,
+)
 from chaitya_sdk.decorator import adapter, get_registered_adapters  # noqa: F401
 from chaitya_sdk.session import SessionRunner  # noqa: F401
 from chaitya_sdk.types import (  # noqa: F401
@@ -144,4 +150,8 @@ __all__ = [
     "stream_cli",
     # Session runner
     "SessionRunner",
+    # Permission helpers
+    "check_fs_read",
+    "check_fs_write",
+    "check_network",
 ]

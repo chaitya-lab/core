@@ -173,6 +173,20 @@ class SessionManager:
             )
         )
         logger.info("Session %s created", name)
+
+        startup_cmd = self._template_startup_cmd.get(name)
+        if startup_cmd:
+            try:
+                logger.info("Running startup command for session %s: %s", name, startup_cmd)
+                data = f"{startup_cmd}\n".encode()
+                await self._backend.send_input(name, data)
+            except Exception as exc:
+                logger.warning(
+                    "Session %s startup command failed: %s",
+                    name,
+                    exc,
+                )
+
         return handle
 
     async def kill(self, name: str) -> None:
@@ -329,11 +343,20 @@ class SessionManager:
 
     async def _mark_dead(self, name: str) -> None:
         """Mark a session as dead in store."""
+        from chaitya.core.types import SESSION_DEAD
+
         record = await self._store.get_session(name)
         if record:
             record.state = SessionState.DEAD
             await self._store.save_session(record)
             await self._emit_state_change(name, record.state, SessionState.DEAD)
+            await self._bus.emit(
+                Event(
+                    type=SESSION_DEAD,
+                    source_adapter="kernel",
+                    session_id=name,
+                )
+            )
 
     async def _emit_state_change(self, name: str, old: SessionState, new: SessionState) -> None:
         """Emit a session_state_changed event."""

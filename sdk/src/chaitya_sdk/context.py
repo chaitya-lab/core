@@ -179,6 +179,118 @@ class EventBusProxy:
 event_bus = EventBusProxy()
 _registry_proxy: RegistryProxy | None = None
 
+# Current adapter permissions context — set by kernel before invoking adapter
+_current_permissions: AdapterPermissions = AdapterPermissions()
+_current_adapter_name: str = "unknown"
+
+
+def _configure_permissions(adapter_name: str, permissions: AdapterPermissions) -> None:
+    """Called by kernel — sets the current adapter's name and permissions context."""
+    global _current_permissions, _current_adapter_name
+    _current_permissions = permissions
+    _current_adapter_name = adapter_name
+
+
+def check_fs_read(path: str) -> None:
+    """Check if the current adapter may read the given path.
+
+    Args:
+        path: The file path to check.
+
+    Raises:
+        PermissionDenied: If the adapter's fs_read permissions do not cover the path.
+
+    Usage in adapters::
+
+        from chaitya_sdk.context import check_fs_read
+
+        check_fs_read("/tmp/notes.txt")
+        with open("/tmp/notes.txt") as f:
+            content = f.read()
+    """
+    from pathlib import Path
+
+    abs_path = str(Path(path).expanduser().resolve())
+
+    if not _current_permissions.fs_read:
+        raise PermissionDenied(
+            _current_adapter_name,
+            f"read file: {path}",
+            "Adapter has no fs_read permission declared.",
+        )
+
+    for allowed in _current_permissions.fs_read:
+        allowed_path = str(Path(allowed).expanduser().resolve())
+        if abs_path == allowed_path or abs_path.startswith(allowed_path + "/"):
+            return
+
+    raise PermissionDenied(
+        _current_adapter_name,
+        f"read file: {path}",
+        f"Not in allowed fs_read paths: {_current_permissions.fs_read}",
+    )
+
+
+def check_fs_write(path: str) -> None:
+    """Check if the current adapter may write the given path.
+
+    Args:
+        path: The file path to check.
+
+    Raises:
+        PermissionDenied: If the adapter's fs_write permissions do not cover the path.
+
+    Usage in adapters::
+
+        from chaitya_sdk.context import check_fs_write
+
+        check_fs_write("/tmp/output.txt")
+        with open("/tmp/output.txt", "w") as f:
+            f.write(data)
+    """
+    from pathlib import Path
+
+    abs_path = str(Path(path).expanduser().resolve())
+
+    if not _current_permissions.fs_write:
+        raise PermissionDenied(
+            _current_adapter_name,
+            f"write file: {path}",
+            "Adapter has no fs_write permission declared.",
+        )
+
+    for allowed in _current_permissions.fs_write:
+        allowed_path = str(Path(allowed).expanduser().resolve())
+        if abs_path == allowed_path or abs_path.startswith(allowed_path + "/"):
+            return
+
+    raise PermissionDenied(
+        _current_adapter_name,
+        f"write file: {path}",
+        f"Not in allowed fs_write paths: {_current_permissions.fs_write}",
+    )
+
+
+def check_network() -> None:
+    """Check if the current adapter may make network requests.
+
+    Raises:
+        PermissionDenied: If the adapter does not have network=True.
+
+    Usage in adapters::
+
+        from chaitya_sdk.context import check_network
+
+        check_network()
+        response = requests.get("https://api.example.com/data")
+    """
+    if not _current_permissions.network:
+        raise PermissionDenied(
+            _current_adapter_name,
+            "make network requests",
+            "Adapter contract does not grant network permission.",
+        )
+
 
 class RegistryProxy:
     """Adapter-facing registry access proxy.

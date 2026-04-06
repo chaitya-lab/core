@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import tempfile
 from dataclasses import asdict
 from pathlib import Path
 
-from chaitya_sdk import ChaityaStream, SessionContext, adapter
+from chaitya_sdk import ChaityaStream, SessionContext, adapter, PermissionDenied
+from chaitya_sdk.context import check_fs_read, check_fs_write
 
 
 @adapter(
@@ -26,7 +28,10 @@ from chaitya_sdk import ChaityaStream, SessionContext, adapter
             "examples": ["chaitya file write --path notes.txt --text hello"],
         },
     ],
-    permissions={"fs_read": ["."], "fs_write": ["."]},
+    permissions={
+        "fs_read": [".", tempfile.gettempdir()],
+        "fs_write": [".", tempfile.gettempdir()],
+    },
 )
 def file_handler(stream: ChaityaStream, ctx: SessionContext) -> tuple[bytes, int]:
     subcommand = str(ctx.args.get("subcommand", ""))
@@ -37,7 +42,10 @@ def file_handler(stream: ChaityaStream, ctx: SessionContext) -> tuple[bytes, int
     path = Path(str(path_arg)).expanduser()
     if subcommand == "read":
         try:
+            check_fs_read(str(path))
             return path.read_text(encoding="utf-8").encode("utf-8"), 0
+        except PermissionDenied as exc:
+            return str(exc).encode("utf-8"), 1
         except Exception as exc:
             return str(exc).encode("utf-8"), 1
 
@@ -46,9 +54,12 @@ def file_handler(stream: ChaityaStream, ctx: SessionContext) -> tuple[bytes, int
         if text is None:
             return b"Missing required argument: --text", 1
         try:
+            check_fs_write(str(path))
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(str(text), encoding="utf-8")
             return f"Wrote {path}".encode(), 0
+        except PermissionDenied as exc:
+            return str(exc).encode("utf-8"), 1
         except Exception as exc:
             return str(exc).encode("utf-8"), 1
 

@@ -80,11 +80,13 @@ class SqliteEventBus:
         max_events_per_second: int = 1000,
         batch_size: int = 100,
         batch_flush_seconds: float = 0.5,
+        max_log_size_bytes: int = 1_073_741_824,
     ) -> None:
         self._db_path = str(db_path)
         self._max_eps = max_events_per_second
         self._batch_size = batch_size
         self._batch_flush_seconds = batch_flush_seconds
+        self._max_log_size = max_log_size_bytes
         self._db: aiosqlite.Connection | None = None
         self._subscriptions: dict[str, _SubscriptionEntry] = {}
         self._lock = asyncio.Lock()
@@ -95,6 +97,9 @@ class SqliteEventBus:
         self._pending_rows: list[tuple[Any, ...]] = []
         self._flush_task: asyncio.Task[None] | None = None
         self._flush_lock = asyncio.Lock()
+        # Rolling deletion: check size every N flushes
+        self._flush_count_since_size_check: int = 0
+        self._size_check_interval: int = 10
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -247,11 +252,59 @@ class SqliteEventBus:
             # Put rows back on failure (best-effort)
             self._pending_rows = rows + self._pending_rows
 
+        # Rolling deletion: check size periodically, delete oldest events when over limit
+        self._flush_count_since_size_check += 1
+        if self._flush_count_since_size_check >= self._size_check_interval:
+            self._flush_count_since_size_check = 0
+            await self._enforce_log_size()
+
     async def _flush_loop(self) -> None:
         """Background task: flush pending rows to SQLite periodically."""
         while True:
             await asyncio.sleep(self._batch_flush_seconds)
             await self._flush_to_db()
+
+    async def _enforce_log_size(self) -> None:
+        """Delete oldest events when the database exceeds max_log_size_bytes.
+
+        PRD §3.7: rolling deletion of oldest events when max_log_size_bytes is approached.
+        Deletes down to 80% of the limit to avoid constant small deletions.
+        """
+        if self._max_log_size <= 0 or self._db is None:
+            return
+        try:
+            db_size = Path(self._db_path).stat().st_size
+            if db_size <= self._max_log_size:
+                return
+            # Target: delete down to 80% of the limit
+            target_size = int(self._max_log_size * 0.8)
+            over_by = db_size - target_size
+
+            # Estimate how many rows to delete (avg row ~500 bytes)
+            avg_row_bytes = 500
+            rows_to_delete = max(1, over_by // avg_row_bytes)
+
+            cursor = await self._db.execute(
+                "SELECT event_id FROM events ORDER BY timestamp ASC LIMIT ?",
+                (rows_to_delete,),
+            )
+            ids = [row[0] for row in await cursor.fetchall()]
+            if ids:
+                placeholders = ",".join("?" for _ in ids)
+                await self._db.execute(
+                    f"DELETE FROM events WHERE event_id IN ({placeholders})", ids
+                )
+                await self._db.commit()
+                new_size = Path(self._db_path).stat().st_size
+                logger.warning(
+                    "Event log rolling deletion: removed %d oldest events (%.1fMB -> %.1fMB, limit=%.1fMB)",
+                    len(ids),
+                    db_size / 1_048_576,
+                    new_size / 1_048_576,
+                    self._max_log_size / 1_048_576,
+                )
+        except Exception as exc:
+            logger.error("Rolling deletion failed: %s", exc)
 
     async def subscribe(
         self,
