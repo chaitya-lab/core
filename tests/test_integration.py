@@ -27,8 +27,8 @@ from chaitya.core.types import CommandOutput, EventFilter
 
 @pytest.fixture
 async def kernel():
-    """Kernel with local session backend and workspace adapters (includes test)."""
-    k = Kernel(db_path=":memory:", session_backend="local")
+    """Kernel with tmux session backend and workspace adapters (includes test)."""
+    k = Kernel(db_path=":memory:", session_backend="tmux")
     await k.boot()
     yield k
     await k.shutdown()
@@ -119,7 +119,7 @@ class TestWatch:
         assert "test.ping" in result.processed or "ping" in result.processed
 
     async def test_watch_with_session_filter(self) -> None:
-        kernel = Kernel(db_path=":memory:", session_backend="local")
+        kernel = Kernel(db_path=":memory:", session_backend="tmux")
         await kernel.boot()
         try:
             await kernel.dispatch("session create watch-session")
@@ -229,7 +229,7 @@ class TestSessionLifecycle:
         await kernel.dispatch('session send-input io-test "X=world" --newline')
         await kernel.dispatch('session send-input io-test "echo Hello,$X" --newline')
 
-        result = await kernel.dispatch("session output io-test")
+        result = await kernel.dispatch("session output io-test --idle-timeout 1.0")
         assert result.exit_code == 0
         assert "Hello,world" in result.processed
 

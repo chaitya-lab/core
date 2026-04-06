@@ -222,7 +222,7 @@ class TestDispatch:
         )
 
     async def test_dispatch_workspace_shell_adapter(self) -> None:
-        kernel = Kernel(db_path=":memory:")
+        kernel = Kernel(db_path=":memory:", session_backend="tmux")
         await kernel.boot()
         try:
             command = "Write-Output hello" if os.name == "nt" else "printf hello"
@@ -248,7 +248,7 @@ class TestDispatch:
     async def test_session_send_input_and_output_roundtrip(self) -> None:
         kernel = Kernel(
             db_path=":memory:",
-            session_backend="local",
+            session_backend="tmux",
             system_adapters=frozenset(),
         )
         await kernel.boot()
@@ -257,19 +257,15 @@ class TestDispatch:
             assert created.exit_code == 0
 
             read_cmd = "$X = Read-Host 'X'" if os.name == "nt" else "read X"
-            first = await kernel.dispatch(
-                f'session send-input loop "{read_cmd}" --newline'
-            )
+            first = await kernel.dispatch(f'session send-input loop "{read_cmd}" --newline')
             assert first.exit_code == 0
             second = await kernel.dispatch('session send-input loop "muku" --newline')
             assert second.exit_code == 0
             echo_cmd = "Write-Output ACK:$X" if os.name == "nt" else "echo ACK:$X"
-            third = await kernel.dispatch(
-                f'session send-input loop "{echo_cmd}" --newline'
-            )
+            third = await kernel.dispatch(f'session send-input loop "{echo_cmd}" --newline')
             assert third.exit_code == 0
 
-            output = await kernel.dispatch("session output loop")
+            output = await kernel.dispatch("session output loop --idle-timeout 1.0")
             assert output.exit_code == 0
             assert "ACK:muku" in output.processed
         finally:
@@ -278,7 +274,7 @@ class TestDispatch:
     async def test_session_set_env_and_watch(self) -> None:
         kernel = Kernel(
             db_path=":memory:",
-            session_backend="local",
+            session_backend="tmux",
             system_adapters=frozenset(),
         )
         await kernel.boot()

@@ -62,7 +62,7 @@ class TestCustomAdaptorPaths:
             kernel=KernelConfig(),
             store=StoreConfig(path=":memory:"),
             event_bus=EventBusConfig(),
-            session=SessionConfig(backend="local"),
+            session=SessionConfig(backend="tmux"),
             adapter_search_paths=[str(root)],
             system_adapters=["file", "shell"],
         )
@@ -93,7 +93,7 @@ class TestCustomAdaptorPaths:
             kernel=KernelConfig(),
             store=StoreConfig(path=str(db_path)),
             event_bus=EventBusConfig(),
-            session=SessionConfig(backend="local"),
+            session=SessionConfig(backend="tmux"),
             adapter_search_paths=[str(root)],
             system_adapters=["file", "shell"],
         )

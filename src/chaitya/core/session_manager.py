@@ -88,9 +88,13 @@ class SessionManager:
                 if record.template:
                     try:
                         template_data = await self._load_template(record.template)
-                        auto_restart = bool(template_data.get("auto_restart_on_kernel_start", False))
+                        auto_restart = bool(
+                            template_data.get("auto_restart_on_kernel_start", False)
+                        )
                         self._template_auto_restart[record.name] = auto_restart
-                        self._template_startup_cmd[record.name] = template_data.get("startup_command")
+                        self._template_startup_cmd[record.name] = template_data.get(
+                            "startup_command"
+                        )
                     except Exception as exc:
                         logger.warning(
                             "Failed to load template %r during restore: %s",
@@ -124,7 +128,7 @@ class SessionManager:
         logger.info("SessionManager started (%d/%d sessions alive)", restored, len(records))
 
     async def stop(self) -> None:
-        """Stop the session manager."""
+        """Stop the session manager and clean up all sessions."""
         if self._stuck_monitor_task and not self._stuck_monitor_task.done():
             self._stuck_monitor_task.cancel()
             try:
@@ -132,6 +136,11 @@ class SessionManager:
             except asyncio.CancelledError:
                 pass
         self._stuck_monitor_task = None
+        for record in await self.list():
+            try:
+                await self._backend.kill(record.name)
+            except Exception:
+                pass
         logger.info("SessionManager stopped")
 
     # ------------------------------------------------------------------
