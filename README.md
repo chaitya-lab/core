@@ -32,21 +32,26 @@ The kernel routes. Adapters act. The kernel has **six built-in commands**: `info
 ## Quick Start
 
 ```bash
-# Install from source
+# Install from source (macOS/Linux)
 pip install -e ".[dev]"
 pip install -e ./sdk
+
+# Install from source (Windows/PowerShell)
+pip install -e . -e ./sdk
 
 # Run the default suite
 python3 -m pytest tests -q
 
-# Run the real tmux integration suite on macOS/Linux
+# Run the real tmux/psmux integration suite
 CHAITYA_RUN_TMUX_TESTS=1 python3 -m pytest tests/test_tmux_backend.py -q
 
 # Run (no adapters installed = functional but empty)
 chaitya info
 ```
 
-Current status: macOS/Linux use a real `tmux` backend by default when `tmux` is available. `LocalProcessBackend` remains in-tree for fallback and focused unit testing.
+Current status:
+- macOS/Linux: uses `tmux` backend by default
+- Windows: uses `psmux` backend by default (auto-detected)
 
 The repository also ships first-party workspace adaptors for `file` and `shell`. They are discovered directly from `adaptors/core/` during development, so the kernel can boot and execute real adaptor commands from the repo without extra packaging steps.
 

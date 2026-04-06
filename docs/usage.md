@@ -2,11 +2,19 @@
 
 ## Install
 
-From source:
+From source (macOS/Linux):
 
 ```bash
-python3 -m pip install -e .
-python3 -m pip install -e ./sdk
+pip install -e .
+pip install -e ./sdk
+```
+
+From source (Windows/PowerShell):
+
+```powershell
+pip install -e . -e ./sdk
+# Or with venv:
+.venv\Scripts\python.exe -m pip install -e . -e ./sdk
 ```
 
 Quick smoke test without writing a database:
