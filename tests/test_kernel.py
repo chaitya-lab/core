@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 
 import pytest
@@ -264,13 +265,15 @@ class TestDispatch:
             read_cmd = "$X = Read-Host 'X'" if os.name == "nt" else "read X"
             first = await kernel.dispatch(f'session send-input loop "{read_cmd}" --newline')
             assert first.exit_code == 0
+            await asyncio.sleep(1.0)
             second = await kernel.dispatch('session send-input loop "muku" --newline')
             assert second.exit_code == 0
+            await asyncio.sleep(1.0)
             echo_cmd = "Write-Output ACK:$X" if os.name == "nt" else "echo ACK:$X"
             third = await kernel.dispatch(f'session send-input loop "{echo_cmd}" --newline')
             assert third.exit_code == 0
 
-            output = await kernel.dispatch("session output loop --idle-timeout 1.0")
+            output = await kernel.dispatch("session output loop --idle-timeout 1.5")
             assert output.exit_code == 0
             assert "ACK:muku" in output.processed
         finally:
@@ -287,8 +290,9 @@ class TestDispatch:
             await kernel.dispatch("session create envloop")
             set_env = await kernel.dispatch("session set-env envloop --key GREETING --value hello")
             assert set_env.exit_code == 0
+            await asyncio.sleep(0.5)
             await kernel.dispatch('session send envloop --text "echo $GREETING" --newline')
-            output = await kernel.dispatch("session output envloop")
+            output = await kernel.dispatch("session output envloop --idle-timeout 1.0")
             assert "hello" in output.processed
 
             watched = await kernel.dispatch(

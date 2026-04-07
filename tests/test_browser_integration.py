@@ -38,7 +38,7 @@ def _start_test_server() -> subprocess.Popen:
         ],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
-        cwd="/Users/muku/Projects/Chaitya/git/core",
+        cwd=Path(__file__).resolve().parent.parent,
     )
     for _ in range(30):
         try:
