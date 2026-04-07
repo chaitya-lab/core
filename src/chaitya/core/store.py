@@ -125,6 +125,7 @@ class SqliteStore:
                 "env_vars": record.identity.env_vars,
                 "working_dir": record.identity.working_dir,
                 "browser_profile": record.identity.browser_profile,
+                "git_worktree": record.identity.git_worktree,
             }
         )
         metadata_json = json.dumps(record.metadata, default=str)
@@ -346,6 +347,7 @@ class SqliteStore:
                 env_vars=identity_data.get("env_vars", {}),
                 working_dir=identity_data.get("working_dir"),
                 browser_profile=identity_data.get("browser_profile"),
+                git_worktree=identity_data.get("git_worktree", False),
             ),
             metadata=metadata,
             exec_mode=row[5] or "enabled",

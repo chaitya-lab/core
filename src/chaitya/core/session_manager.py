@@ -63,6 +63,8 @@ class SessionManager:
         self._stuck_monitor_task: asyncio.Task[None] | None = None
         self._template_auto_restart: dict[str, bool] = {}
         self._template_startup_cmd: dict[str, str | None] = {}
+        self._template_git_worktree: dict[str, bool] = {}
+        self._template_health_check: dict[str, int] = {}
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -95,6 +97,10 @@ class SessionManager:
                         self._template_startup_cmd[record.name] = template_data.get(
                             "startup_command"
                         )
+                        self._template_git_worktree[record.name] = template_data.get("git_worktree", False)
+                        health_check = template_data.get("health_check_interval")
+                        if health_check:
+                            self._template_health_check[record.name] = self._parse_duration(health_check)
                     except Exception as exc:
                         logger.warning(
                             "Failed to load template %r during restore: %s",
@@ -168,6 +174,10 @@ class SessionManager:
                         "auto_restart_on_kernel_start", False
                     )
                     self._template_startup_cmd[name] = template_data.get("startup_command")
+                    self._template_git_worktree[name] = template_data.get("git_worktree", False)
+                    health_check = template_data.get("health_check_interval")
+                    if health_check:
+                        self._template_health_check[name] = self._parse_duration(health_check)
                 except Exception as exc:
                     logger.warning("Failed to load template %r: %s — using defaults", template, exc)
                     identity = SessionIdentity()
@@ -393,7 +403,27 @@ class SessionManager:
             env_vars=env_vars,
             working_dir=identity_data.get("working_dir"),
             browser_profile=identity_data.get("browser_profile"),
+            git_worktree=data.get("git_worktree", False),
         )
+
+    def _parse_duration(self, value: str | int) -> int:
+        """Parse duration string like '60s' to seconds (int)."""
+        if isinstance(value, int):
+            return value
+        if isinstance(value, str):
+            value = value.strip().lower()
+            if value.endswith("s"):
+                return int(value[:-1])
+            elif value.endswith("m"):
+                return int(value[:-1]) * 60
+            elif value.endswith("h"):
+                return int(value[:-1]) * 3600
+            else:
+                try:
+                    return int(value)
+                except ValueError:
+                    return 60
+        return 60
 
     async def _mark_dead(self, name: str) -> None:
         """Mark a session as dead in store."""
@@ -425,26 +455,36 @@ class SessionManager:
         )
 
     async def _stuck_monitor_loop(self) -> None:
-        """Background loop that detects stuck sessions.
+        """Background loop that detects stuck sessions and performs health checks.
 
         Verifies the session still exists in the backend before marking it stuck.
         If the backend pane is gone (e.g. tmux killed externally), marks DEAD instead.
+
+        For sessions with health_check_interval, also performs periodic health checks.
         """
+        HEALTH_CHECK_COUNTER: dict[str, int] = {}
         while True:
             await asyncio.sleep(10)  # check every 10 seconds
             now = datetime.now(UTC)
             for name, last in list(self._last_activity.items()):
                 elapsed = (now - last).total_seconds()
+
+                health_interval = self._template_health_check.get(name)
+                if health_interval:
+                    HEALTH_CHECK_COUNTER.setdefault(name, 0)
+                    HEALTH_CHECK_COUNTER[name] += 10
+                    if HEALTH_CHECK_COUNTER[name] >= health_interval:
+                        HEALTH_CHECK_COUNTER[name] = 0
+                        await self._perform_health_check(name)
+
                 if elapsed >= self._stuck_threshold:
                     record = await self._store.get_session(name)
                     if record and record.state == SessionState.BUSY:
-                        # Check if the backend pane still exists
                         try:
                             exists = await self._backend.exists(name)
                         except Exception:
                             exists = False
                         if not exists:
-                            # Session was killed externally (e.g. tmux died)
                             await self._mark_dead(name)
                             logger.warning(
                                 "Session %s marked dead (backend pane gone after %ds idle)",
@@ -463,3 +503,33 @@ class SessionManager:
                                 )
                             )
                             logger.warning("Session %s stuck (%ds idle)", name, int(elapsed))
+
+    async def _perform_health_check(self, name: str) -> None:
+        """Perform a health check on a session.
+
+        Emits session_health_check event. Template can define on_stuck behavior.
+        """
+        record = await self._store.get_session(name)
+        if not record or record.state == SessionState.DEAD:
+            return
+
+        health_ok = True
+        try:
+            exists = await self._backend.exists(name)
+            if not exists:
+                health_ok = False
+        except Exception:
+            health_ok = False
+
+        await self._bus.emit(
+            Event(
+                type="session_health_check",
+                source_adapter="kernel",
+                session_id=name,
+                payload={
+                    "healthy": health_ok,
+                    "state": record.state.value,
+                    "template": record.template,
+                },
+            )
+        )

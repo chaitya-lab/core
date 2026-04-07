@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import os
 import shutil
+from pathlib import Path
 
 import pytest
 
@@ -192,3 +193,62 @@ class TestSessionManager:
         assert record is not None
         assert record.state == SessionState.DEAD
         await mgr.stop()
+
+
+class TestTemplateFields:
+    """Tests for template fields: git_worktree, health_check_interval."""
+
+    async def test_parse_duration_seconds(self, manager: SessionManager) -> None:
+        """_parse_duration handles seconds."""
+        assert manager._parse_duration("60") == 60
+        assert manager._parse_duration("120") == 120
+
+    async def test_parse_duration_with_suffix(self, manager: SessionManager) -> None:
+        """_parse_duration handles s/m/h suffixes."""
+        assert manager._parse_duration("60s") == 60
+        assert manager._parse_duration("2m") == 120
+        assert manager._parse_duration("1h") == 3600
+
+    async def test_parse_duration_int(self, manager: SessionManager) -> None:
+        """_parse_duration handles int values."""
+        assert manager._parse_duration(45) == 45
+
+    async def test_identity_from_template_git_worktree(
+        self, store: SqliteStore, bus: SqliteEventBus, tmp_path: Path
+    ) -> None:
+        """Template git_worktree field is extracted into SessionIdentity."""
+        templates_dir = tmp_path / "templates"
+        templates_dir.mkdir()
+        template_file = templates_dir / "git-test.yaml"
+        template_file.write_text(
+            "identity:\n  working_dir: /tmp\n\ngit_worktree: true\n"
+        )
+
+        mgr = SessionManager(_make_backend(), store, bus, templates_dir=str(templates_dir))
+        await mgr.start()
+        try:
+            await mgr.create("git-worktree-test", template="git-test")
+            record = await mgr.status("git-worktree-test")
+            assert record is not None
+            assert record.identity.git_worktree is True
+        finally:
+            await mgr.stop()
+
+    async def test_health_check_interval_loaded(
+        self, store: SqliteStore, bus: SqliteEventBus, tmp_path: Path
+    ) -> None:
+        """Template health_check_interval is stored in session manager."""
+        templates_dir = tmp_path / "templates"
+        templates_dir.mkdir()
+        template_file = templates_dir / "health.yaml"
+        template_file.write_text(
+            "identity:\n  working_dir: /tmp\n\ngit_worktree: false\nhealth_check_interval: 30s\n"
+        )
+
+        mgr = SessionManager(_make_backend(), store, bus, templates_dir=str(templates_dir))
+        await mgr.start()
+        try:
+            await mgr.create("health-test", template="health")
+            assert mgr._template_health_check.get("health-test") == 30
+        finally:
+            await mgr.stop()

@@ -175,6 +175,7 @@ class SessionIdentity:
     env_vars: dict[str, str] = field(default_factory=dict)
     working_dir: str | None = None
     browser_profile: str | None = None
+    git_worktree: bool = False
 
 
 @dataclass(frozen=True)
