@@ -70,8 +70,15 @@ adaptors/core/             First-party adapters used by the repo
 adaptors/community/        Experimental and community adapters
 docs/                      User and contributor documentation
 tests/                     Unit and integration tests
-plan/                      Internal planning and architecture notes
 ```
+
+## Requirements
+
+- Python 3.11+
+- `tmux` for persistent sessions on macOS/Linux
+- `psmux` for persistent sessions on Windows
+
+With `session.backend: auto`, Chaitya selects `tmux` on Unix-like systems and `psmux` on Windows.
 
 ## Quick Start
 
@@ -92,6 +99,18 @@ Windows PowerShell:
 python -m venv .venv
 .venv\Scripts\Activate.ps1
 python -m pip install -e . -e ./sdk
+```
+
+For Windows session support, make sure `psmux` is installed and available on `PATH`. See [Windows Support](docs/WINDOWS_SUPPORT.md).
+
+## Quick Reference
+
+```bash
+chaitya info
+chaitya registry list
+chaitya session create demo
+chaitya session send demo --text "echo hello" --newline
+chaitya session output demo
 ```
 
 ### 2. Check the kernel
