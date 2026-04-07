@@ -252,3 +252,76 @@ class TestTemplateFields:
             assert mgr._template_health_check.get("health-test") == 30
         finally:
             await mgr.stop()
+
+
+class TestAutoRestart:
+    """Tests for template auto_restart_on_kernel_start (PRD §3.3)."""
+
+    async def test_auto_restart_template_stored(
+        self, store: SqliteStore, bus: SqliteEventBus, tmp_path: Path
+    ) -> None:
+        """Template auto_restart_on_kernel_start is stored in session manager."""
+        templates_dir = tmp_path / "templates"
+        templates_dir.mkdir()
+        template_file = templates_dir / "autorestart.yaml"
+        template_file.write_text(
+            "identity:\n  working_dir: /tmp\n\n"
+            "auto_restart_on_kernel_start: true\n"
+        )
+
+        mgr = SessionManager(_make_backend(), store, bus, templates_dir=str(templates_dir))
+        await mgr.start()
+        try:
+            await mgr.create("autorestart-test", template="autorestart")
+            assert mgr._template_auto_restart.get("autorestart-test") is True
+        finally:
+            await mgr.stop()
+
+    async def test_auto_restart_false_by_default(
+        self, store: SqliteStore, bus: SqliteEventBus, tmp_path: Path
+    ) -> None:
+        """Template without auto_restart defaults to False."""
+        templates_dir = tmp_path / "templates"
+        templates_dir.mkdir()
+        template_file = templates_dir / "noautorestart.yaml"
+        template_file.write_text(
+            "identity:\n  working_dir: /tmp\n\n"
+        )
+
+        mgr = SessionManager(_make_backend(), store, bus, templates_dir=str(templates_dir))
+        await mgr.start()
+        try:
+            await mgr.create("noautorestart-test", template="noautorestart")
+            assert mgr._template_auto_restart.get("noautorestart-test") is False
+        finally:
+            await mgr.stop()
+
+
+class TestStuckDetection:
+    """Tests for session stuck detection (PRD §3.3)."""
+
+    async def test_stuck_threshold_configured(
+        self, backend: SessionBackend, store: SqliteStore, bus: SqliteEventBus
+    ) -> None:
+        """SessionManager accepts stuck_threshold_seconds config."""
+        mgr = SessionManager(backend, store, bus, stuck_threshold_seconds=30)
+        assert mgr._stuck_threshold == 30
+        await mgr.start()
+        await mgr.stop()
+
+    async def test_stuck_monitor_running(
+        self, backend: SessionBackend, store: SqliteStore, bus: SqliteEventBus
+    ) -> None:
+        """SessionManager starts stuck monitor task on boot."""
+        mgr = SessionManager(backend, store, bus, stuck_threshold_seconds=60)
+        await mgr.start()
+        assert mgr._stuck_monitor_task is not None
+        assert not mgr._stuck_monitor_task.done()
+        await mgr.stop()
+
+    async def test_last_activity_updated_on_create(
+        self, manager: SessionManager
+    ) -> None:
+        """Creating a session sets the last_activity timestamp."""
+        await manager.create("activity-test")
+        assert "activity-test" in manager._last_activity

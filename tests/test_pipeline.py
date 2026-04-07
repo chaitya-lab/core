@@ -347,6 +347,73 @@ class TestPipelineExecution:
     async def test_l2_applied_exactly_once(self) -> None:
         orch = self._make_orchestrator()
         chunks = await _collect_chunks(orch, "echo run")
+
+
+class TestResourceLimits:
+    """Tests for resource limits enforcement (PRD §9, §15)."""
+
+    async def test_timeout_enforced(self) -> None:
+        """Test that max_execution_seconds causes timeout."""
+        import asyncio
+        from unittest.mock import MagicMock
+
+        orch = PipelineOrchestrator()
+
+        async def slow_handler(stream, ctx):
+            await asyncio.sleep(5)  # 5 second sleep
+            return b"slow", 0
+
+        mock_limits = MagicMock()
+        mock_limits.max_execution_seconds = 0.1  # 100ms timeout
+        mock_limits.max_output_bytes = None
+
+        def mock_get_resource_limits(adapter):
+            return mock_limits
+
+        orch.register_handler("slow", slow_handler)
+        orch._get_resource_limits = mock_get_resource_limits
+
+        chain = orch.parse_chain("slow run")
+        ctx = PipelineContext(session_id="test")
+
+        chunks = []
+        async for chunk in orch.execute(chain, ctx):
+            chunks.append(chunk)
+
+        stderr_chunks = [c for c in chunks if c.is_stderr]
+        assert any(b"timeout" in c.data.lower() for c in stderr_chunks)
+
+    async def test_max_output_bytes_enforced(self) -> None:
+        """Test that max_output_bytes is checked."""
+        from unittest.mock import MagicMock
+
+        orch = PipelineOrchestrator()
+
+        async def large_handler(stream, ctx):
+            return b"x" * 1000, 0
+
+        mock_limits = MagicMock()
+        mock_limits.max_execution_seconds = 60
+        mock_limits.max_output_bytes = 100  # 100 byte limit
+
+        def mock_get_resource_limits(adapter):
+            return mock_limits
+
+        orch.register_handler("large", large_handler)
+        orch._get_resource_limits = mock_get_resource_limits
+
+        chain = orch.parse_chain("large run")
+        ctx = PipelineContext(session_id="test")
+
+        chunks = []
+        async for chunk in orch.execute(chain, ctx):
+            chunks.append(chunk)
+
+        stderr_chunks = [c for c in chunks if c.is_stderr]
+        assert len(stderr_chunks) > 0
+        data = stderr_chunks[0].data
+        data_str = data if isinstance(data, str) else data.decode("utf-8", errors="replace")
+        assert "exceeds" in data_str
         final_chunks = [c for c in chunks if c.is_final]
         assert len(final_chunks) == 1
 

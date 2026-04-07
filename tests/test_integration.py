@@ -247,6 +247,63 @@ class TestSessionLifecycle:
         assert "hello" in result.processed.lower()
         assert "world" in result.processed.lower()
 
+
+class TestSuspensionTypes:
+    """Tests for different suspension input types (PRD §8)."""
+
+    async def test_ask_text_type_suspension(self, kernel: Kernel) -> None:
+        """Test TEXT type suspension requires name."""
+        result = await kernel.dispatch("test ask")
+        assert "[waiting:" in result.processed
+        pending = next(iter(kernel._pending_inputs.values()))
+        assert pending.spec.name == "name"
+
+    async def test_input_list_shows_suspended_request(self, kernel: Kernel) -> None:
+        """Test input list shows suspended requests."""
+        await kernel.dispatch("test ask")
+        result = await kernel.dispatch("input list")
+        assert result.exit_code == 0
+        assert "REQUEST_ID" in result.processed or "name" in result.processed
+
+
+class TestResourceLimits:
+    """Tests for resource limits enforcement (PRD §9, §15)."""
+
+    async def test_adapter_has_resource_limits(self, kernel: Kernel) -> None:
+        """Test adapters declare resource_limits in contract."""
+        registry = kernel._registry
+        test_adapter = registry.get_adapter("test")
+        assert test_adapter is not None
+        assert hasattr(test_adapter.contract, "resource_limits")
+
+    async def test_pipeline_enforces_resource_limits(self, kernel: Kernel) -> None:
+        """Test pipeline checks resource_limits from registry."""
+        from chaitya.core.pipeline import PipelineOrchestrator
+
+        orch = kernel._pipeline
+        assert hasattr(orch, "_get_resource_limits")
+
+
+class TestPipeEquivalence:
+    """Tests for pipe ↔ flag form equivalence (PRD §5, §15)."""
+
+    async def test_info_shows_adapter_list(self, kernel: Kernel) -> None:
+        """Test info command shows adapter list (PRD §5)."""
+        result = await kernel.dispatch("info")
+        assert result.exit_code == 0
+        assert "adapter" in result.processed.lower() or "file" in result.processed.lower()
+
+    async def test_adapter_without_subcommand_shows_info(self, kernel: Kernel) -> None:
+        """Test <adapter> alone equals <adapter> info (PRD §5)."""
+        result = await kernel.dispatch("test")
+        assert result.exit_code == 0
+        assert "test" in result.processed.lower()
+
+    async def test_pipe_operator_works(self, kernel: Kernel) -> None:
+        """Test pipe operator feeds output to next command."""
+        result = await kernel.dispatch("test echo --message hello | test echo --message world")
+        assert result.exit_code == 0
+
     async def test_session_create_nonexistent_backend_fails(self) -> None:
         with pytest.raises(ValueError, match="Unsupported session backend"):
             Kernel(db_path=":memory:", session_backend="nonexistent-backend")

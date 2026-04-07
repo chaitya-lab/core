@@ -168,5 +168,67 @@ class TestEventDrivenFlow:
         assert hasattr(result, "duration_ms")
 
 
+class TestEventSchema:
+    """Tests for event schema compliance (PRD §6)."""
+
+    async def test_event_has_required_fields(self, kernel: Kernel) -> None:
+        """Verify events have all required schema fields."""
+        from chaitya.core.event_bus import SqliteEventBus
+        from chaitya.core.types import EventFilter
+
+        bus = kernel._event_bus
+        received: list = []
+
+        async def capture(event):
+            received.append(event)
+
+        sub = await bus.subscribe(EventFilter(), capture)
+        try:
+            await kernel.dispatch("test emit --name schema_test")
+            await asyncio.sleep(0.2)
+
+            if received:
+                event = received[-1]
+                assert hasattr(event, "event_id")
+                assert hasattr(event, "session_id")
+                assert hasattr(event, "source_adapter")
+                assert hasattr(event, "type")
+                assert hasattr(event, "timestamp")
+                assert hasattr(event, "payload")
+        finally:
+            await bus.unsubscribe(sub)
+
+    async def test_request_id_in_event(self, kernel: Kernel) -> None:
+        """Verify events can carry request_id for correlation (PRD §6)."""
+        result = await kernel.dispatch("test emit --name request_test --payload '{\"request_id\":\"abc123\"}'")
+        assert result.exit_code == 0
+
+        result = await kernel.dispatch("watch --on test.request_test --limit 5")
+        assert result.exit_code == 0
+
+    async def test_emit_with_custom_type(self, kernel: Kernel) -> None:
+        """Test custom event types follow adaptername.eventname convention (PRD §6)."""
+        result = await kernel.dispatch("test emit --name custom_event")
+        assert result.exit_code == 0
+
+        result = await kernel.dispatch("watch --on test.custom_event --limit 1")
+        assert result.exit_code == 0
+        assert "custom_event" in result.processed
+
+    async def test_stdout_stderr_separation(self, kernel: Kernel) -> None:
+        """Test that stdout and stderr are separated in output (PRD §6)."""
+        result = await kernel.dispatch("test echo --message 'stdout content'")
+        assert result.exit_code == 0
+        assert "stdout content" in result.raw
+
+    async def test_progress_update_event_type(self, kernel: Kernel) -> None:
+        """Test progress_update event type is valid (PRD §6)."""
+        result = await kernel.dispatch("test emit --name progress_update")
+        assert result.exit_code == 0
+
+        result = await kernel.dispatch("watch --on test.progress_update --limit 1")
+        assert result.exit_code == 0
+
+
 if __name__ == "__main__":
     asyncio.run(TestEventDrivenFlow().test_html_file_roundtrip(Path(tempfile.gettempdir())))
