@@ -274,6 +274,7 @@ SESSION_KILLED = "session_killed"
 SESSION_STATE_CHANGED = "session_state_changed"
 SESSION_STUCK = "session_stuck"
 SESSION_DEAD = "session_dead"
+SESSION_HEALTH_CHECK = "session_health_check"
 
 # Adapter convention events
 # ---------------------------------------------------------------------------
