@@ -57,7 +57,7 @@ from chaitya_sdk.types import (
 
 from chaitya.core import __version__
 from chaitya.core.backends.tmux import TmuxSessionBackend
-from chaitya.core.config import CoreConfig, EventBusConfig
+from chaitya.core.config import CoreConfig, EventBusConfig, KernelConfig, SessionConfig
 from chaitya.core.event_bus import SqliteEventBus
 from chaitya.core.pipeline import AdapterHandler, PipelineOrchestrator
 from chaitya.core.registry import AdapterRegistry
@@ -177,6 +177,15 @@ class Kernel:
         input_timeout_seconds: int = 300,
         event_bus: SqliteEventBus | None = None,
     ) -> None:
+        # Build a default config if none provided (for programmatic use)
+        if config is None:
+            config = CoreConfig(
+                kernel=KernelConfig(cli_name=cli_name),
+                session=SessionConfig(backend=session_backend, stuck_threshold_seconds=stuck_threshold_seconds),
+                adapter_search_paths=adapter_search_paths or [],
+                enabled_adapters=enabled_adapters or [],
+                disabled_adapters=disabled_adapters or [],
+            )
         self._config = config
         self.cli_name = cli_name
         self._system_adapters = system_adapters or DEFAULT_SYSTEM_ADAPTERS
@@ -573,7 +582,7 @@ class Kernel:
         *,
         session_state: SdkSessionState = SdkSessionState.IDLE,
     ) -> SdkSessionContext:
-        return SdkSessionContext(
+        session_ctx = SdkSessionContext(
             session_id=ctx.session_id,
             session_state=session_state,
             args=args
@@ -585,6 +594,8 @@ class Kernel:
             env={k: str(v) for k, v in ctx.env.items() if not k.startswith("__")},
             dry_run=ctx.dry_run,
         )
+        session_ctx._kernel = self  # type: ignore[attr-defined]
+        return session_ctx
 
     def _inject_missing_suspend_args(
         self,
@@ -1619,8 +1630,13 @@ class Kernel:
                 lines.append(f"  WARNING: {w}")
             return "\n".join(lines).encode("utf-8"), 1
 
+        if sub == "reload":
+            loaded = await self._registry.reload()
+            count = len(loaded)
+            return f"Reloaded {count} adapter(s).\n".encode(), 0
+
         return (
             f"Unknown registry subcommand: {sub}\n"
-            f"Usage: registry <list|info|disable|enable|validate>".encode(),
+            f"Usage: registry <list|info|disable|enable|validate|reload>".encode(),
             1,
         )

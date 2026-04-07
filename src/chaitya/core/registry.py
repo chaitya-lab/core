@@ -348,6 +348,41 @@ class AdapterRegistry:
     def only_enable(self, names: list[str]) -> None:
         """Set the enabled list to exactly these names. Clears previous enabled list."""
         self._enabled = set(names)
+        for name in names:
+            self._disabled.discard(name)
+
+    async def reload(self) -> dict[str, AdapterPackage]:
+        """Reload all adapters.
+
+        Clears loaded adapters and rediscover all adapters from entry points
+        and workspace paths. Returns the newly loaded adapters.
+
+        This allows adding/removing adapters without restarting the kernel.
+
+        Usage:
+            chaitya registry reload
+        """
+        self._loaded.clear()
+        self._handlers.clear()
+
+        packages = await self.discover()
+
+        for pkg in packages:
+            if pkg.status == AdapterStatus.LOADED and pkg.handler:
+                self._loaded[pkg.name] = pkg
+                self._handlers[pkg.name] = pkg.handler
+
+        return self.loaded_adapters
+
+    def add_search_path(self, path: str) -> None:
+        """Add a filesystem path to search for adapters.
+
+        The path is added to the end of the search paths list.
+        Call reload() after adding paths to discover new adapters.
+        """
+        if path not in self._search_paths:
+            self._search_paths.append(path)
+        self._enabled = set(names)
 
     def _is_allowed(self, name: str) -> bool:
         """Return True if the adapter is allowed to load.
@@ -506,11 +541,51 @@ class AdapterRegistry:
         raw_contract: dict[str, Any] | None = None
         handler = self._discover_handler(module, package_name)
 
-        # Strategy 1: module has __adapter_contract__ attribute
-        if hasattr(module, "__adapter_contract__"):
+        # Strategy 1: handler has __chaitya_contract__ (from @adapter decorator)
+        if handler is not None:
+            contract = getattr(handler, "__chaitya_contract__", None)
+            if contract is not None:
+                # Convert AdapterContract to raw dict for _parse_contract
+                raw_contract = {
+                    "contract_version": contract.contract_version,
+                    "name": contract.name,
+                    "description": contract.description,
+                    "depends_on": contract.depends_on,
+                    "default_input_type": contract.default_input_type,
+                    "default_output_type": contract.default_output_type,
+                    "supports_dry_run": contract.supports_dry_run,
+                    "commands": [
+                        {
+                            "name": cmd.name,
+                            "description": cmd.description,
+                            "params": [
+                                {
+                                    "name": p.name,
+                                    "required": p.required,
+                                    "type": p.type,
+                                    "description": p.description,
+                                    "example": p.example,
+                                }
+                                for p in cmd.params
+                            ],
+                            "examples": cmd.examples,
+                        }
+                        for cmd in contract.commands
+                    ],
+                    "permissions": {
+                        "fs_read": contract.permissions.fs_read,
+                        "fs_write": contract.permissions.fs_write,
+                        "network": contract.permissions.network,
+                    },
+                    "events_emitted": contract.events_emitted,
+                    "events_consumed": contract.events_consumed,
+                }
+
+        # Strategy 2: module has __adapter_contract__ attribute
+        if raw_contract is None and hasattr(module, "__adapter_contract__"):
             raw_contract = module.__adapter_contract__
 
-        # Strategy 2: module.json alongside the module file
+        # Strategy 3: module.json alongside the module file
         if raw_contract is None and hasattr(module, "__file__") and module.__file__:
             module_json = Path(module.__file__).parent / "module.json"
             if module_json.exists():
@@ -519,7 +594,7 @@ class AdapterRegistry:
         if raw_contract is None:
             raise AdapterLoadError(
                 package_name,
-                "No __adapter_contract__ attribute or module.json found.",
+                "No __adapter_contract__ attribute, module.json, or @adapter decorator found.",
             )
 
         contract = _parse_contract(raw_contract)

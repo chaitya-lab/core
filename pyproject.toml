@@ -45,6 +45,13 @@ dev = [
 [project.scripts]
 chaitya = "chaitya.core.cli:main"
 
+[project.entry-points."chaitya.adapters"]
+# Third-party adapters can add themselves here via:
+# [project.entry-points."chaitya.adapters"]
+# my-adapter = "my_package.adapter_module"
+# 
+# Or in setup.cfg/pyproject.toml under [project.entry-points."chaitya.adapters"]
+
 [project.urls]
 Homepage = "https://github.com/chaitya-core/chaitya"
 Documentation = "https://github.com/chaitya-core/chaitya/tree/main/docs"
