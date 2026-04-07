@@ -25,6 +25,8 @@ Runtime helpers:
 - `check_network`
 - `SessionRunner`
 
+The SDK exists so adapter authors can depend on a stable public surface instead of importing kernel internals.
+
 Contract types:
 
 - `AdapterContract`
@@ -98,6 +100,8 @@ From this repository:
 ```bash
 pip install -e ./sdk
 ```
+
+For external adapters, declare a `chaitya.adapters` entry point in your package so the kernel can discover it after installation.
 
 ## More
 

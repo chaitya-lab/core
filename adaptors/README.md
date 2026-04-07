@@ -6,45 +6,50 @@ This repository keeps adapter packages under the `adaptors/` directory, even tho
 
 ```text
 adaptors/
-  core/         System adapters (required for kernel boot)
-  community/    User/community adapters (optional)
+  core/         System adapters
+  community/    Optional first-party and community adapters
 ```
 
 ## System Adapters (core/)
 
-Required by the kernel per PRD §3.6. Kernel boot fails if any fail to load:
+These are the repository's system adapters:
 
-- `file` — Read/write local files
-- `shell` — Execute shell commands
-- `route` — Conditional routing in pipelines
-- `process` — Process management
-- `registry` — Adapter discovery and loading
+- `file` - Read and write local files
+- `shell` - Execute one-off shell commands
+- `route` - Conditional routing inside pipelines
+- `process` - Process inspection and control
+- `registry` - Adapter discovery and validation surface
 
 ## Community Adapters (community/)
 
-Optional adapters. Kernel warns on load failure but continues:
+These are optional extensions kept in this repository:
 
-- `browser` — Browser automation via Playwright
-- `browser2` — Alternative browser adapter
-- `config` — Configuration management
-- `desktop` — Desktop automation (screenshots, clipboard)
-- `gui` — GUI control (mouse, keyboard)
-- `test` — Testing utilities
-- `watchdog` — File watching
+- `browser` - Browser automation via Playwright
+- `browser2` - Alternative browser adapter
+- `config` - Core and adapter config inspection/editing
+- `desktop` - Desktop automation helpers
+- `gui` - GUI control
+- `test` - Development and test helpers
+- `watchdog` - File watching experiments
 
 ## Discovery
 
-During development, the kernel can discover adapters from configured filesystem paths in addition to installed Python entry points.
+The kernel discovers adapters from:
+
+- the built-in `adaptors/core/` workspace
+- the built-in `adaptors/community/` workspace
+- configured filesystem search paths
+- installed Python entry points in `chaitya.adapters`
 
 That makes this workspace useful both as a source tree and as a set of reference implementations.
 
 ## Adding a New Adapter
 
-1. Choose location: `core/` for system adapters, `community/` for user adapters
-2. Create adapter structure with `pyproject.toml` and entry point
-3. Add `[project.entry-points."chaitya.adapters"]` in pyproject.toml
-4. Install in editable mode for development
+1. Choose location: `core/` for system adapters, `community/` for optional adapters.
+2. Create adapter structure with `pyproject.toml` and entry point.
+3. Add `[project.entry-points."chaitya.adapters"]` in `pyproject.toml`.
+4. Install in editable mode for development.
 
 ## Moving Adapters Between Core and Community
 
-System adapters that can be replaced should move to `community/`. Core adapters are only those required for kernel boot per the PRD.
+Keep `core/` narrow. If an adapter is optional, experimental, platform-specific, or replaceable without breaking the kernel surface, it belongs in `community/`.

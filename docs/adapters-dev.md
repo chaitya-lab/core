@@ -167,6 +167,8 @@ Example:
 greet = "chaitya_adapter_greet"
 ```
 
+This is also how external adapters are discovered when installed with `pip`.
+
 ## Local Workspace Development
 
 Chaitya can also discover adapters from filesystem paths.
@@ -195,6 +197,23 @@ or:
 ```bash
 export CHAITYA_ADAPTER_PATHS="/abs/path/to/my-adapters"
 ```
+
+Windows PowerShell:
+
+```powershell
+$env:CHAITYA_ADAPTER_PATHS = "C:\adapters;D:\more-adapters"
+```
+
+`CHAITYA_ADAPTER_PATHS` uses the platform path separator.
+
+## Repository Conventions
+
+In this repository:
+
+- `adaptors/core/` is for system adapters that are part of the normal kernel surface
+- `adaptors/community/` is for optional first-party and community adapters
+
+If an adapter is not required for kernel boot or the normal core surface, it should not live in `adaptors/core/`.
 
 ## Good Adapter Behavior
 

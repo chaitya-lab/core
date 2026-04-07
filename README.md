@@ -1,31 +1,30 @@
 # Chaitya Core
 
-Chaitya Core is a small automation kernel built around four ideas:
+Chaitya Core is a small automation kernel with three main primitives:
 
-- commands are dispatched through a single CLI
-- long-running work happens inside named sessions
-- adapters provide capabilities
-- events make automation observable and composable
+- a single CLI for dispatch
+- persistent named sessions for long-running work
+- adapters for everything outside the kernel boundary
 
-The core is intentionally narrow. It owns boot, dispatch, sessions, events, pipeline execution, adapter discovery, and persistence. Everything else should live in adapters.
+The kernel owns boot, dispatch, sessions, events, pipeline execution, adapter discovery, and persistence. Capabilities should usually be added as adapters, not by expanding the core.
 
 ## Status
 
-`0.1.0a1` alpha. The design is stable enough to build against, but interfaces may still change.
+`0.1.0a1` alpha. The project is usable, but public interfaces may still change.
 
 ## What Exists Today
 
-Chaitya Core currently provides:
+Chaitya currently provides:
 
 - a `chaitya` CLI
 - a `Kernel` orchestrator
 - a SQLite-backed store and event bus
-- persistent named sessions through `tmux` on Unix-like systems and `psmux` on Windows
-- a pipeline that parses and runs chained commands
-- adapter discovery from Python entry points and local workspaces
-- an SDK package for adapter authors
+- persistent session backends: `tmux` on non-Windows systems and `psmux` on Windows
+- a pipeline for chained commands and normalized output
+- adapter discovery from local workspaces and Python entry points
+- an SDK for adapter authors
 
-Built-in kernel commands:
+Kernel-dispatched commands:
 
 - `info`
 - `session`
@@ -34,41 +33,29 @@ Built-in kernel commands:
 - `watch`
 - `registry`
 
-First-party adapters available in this repository:
+First-party adapters in this repository:
 
-- `file`
-- `shell`
-- `route`
-- `process`
-- `test`
-
-Additional adapters in the workspace:
-
-- `browser`
-- `browser2`
-- `desktop`
-- `gui`
+- system adapters in `adaptors/core/`: `file`, `shell`, `route`, `process`, `registry`
+- community adapters in `adaptors/community/`: `browser`, `browser2`, `config`, `desktop`, `gui`, `test`, `watchdog`
 
 ## Mental Model
 
-Think of the system in layers:
-
 1. The CLI receives a command expression.
-2. The kernel parses it and routes each stage.
-3. A built-in command or adapter runs.
+2. The kernel parses the command or pipeline.
+3. A kernel command or adapter runs.
 4. Output is normalized by the pipeline.
 5. Events and session state are persisted.
 
-The kernel routes. Adapters do the work.
+The kernel routes and records. Adapters do the actual work.
 
 ## Repository Map
 
 ```text
 src/chaitya/core/          Kernel implementation
 sdk/src/chaitya_sdk/       Public SDK for adapter authors
-adaptors/core/             First-party adapters used by the repo
-adaptors/community/        Experimental and community adapters
-docs/                      User and contributor documentation
+adaptors/core/             System adapters required for normal boot
+adaptors/community/        Optional first-party/community adapters
+docs/                      Public documentation
 tests/                     Unit and integration tests
 ```
 
@@ -78,7 +65,7 @@ tests/                     Unit and integration tests
 - `tmux` for persistent sessions on macOS/Linux
 - `psmux` for persistent sessions on Windows
 
-With `session.backend: auto`, Chaitya selects `tmux` on Unix-like systems and `psmux` on Windows.
+With `session.backend: auto`, Chaitya selects `tmux` on non-Windows systems and `psmux` on Windows.
 
 ## Quick Start
 
@@ -101,17 +88,7 @@ python -m venv .venv
 python -m pip install -e . -e ./sdk
 ```
 
-For Windows session support, make sure `psmux` is installed and available on `PATH`. See [Windows Support](docs/WINDOWS_SUPPORT.md).
-
-## Quick Reference
-
-```bash
-chaitya info
-chaitya registry list
-chaitya session create demo
-chaitya session send demo --text "echo hello" --newline
-chaitya session output demo
-```
+If you want persistent Windows sessions, install `psmux` first. See [Windows Support](docs/WINDOWS_SUPPORT.md).
 
 ### 2. Check the kernel
 
@@ -126,6 +103,7 @@ chaitya registry list
 chaitya test hello
 chaitya shell run --command "echo hello"
 chaitya file read --path README.md
+chaitya config paths
 ```
 
 ### 4. Create a persistent session
@@ -145,10 +123,20 @@ chaitya shell run --command "git status --short"
 chaitya process list
 ```
 
-### Use the command pipeline
+### Use the pipeline
 
 ```bash
 chaitya file read --path README.md | chaitya route --if-pattern "Chaitya"
+chaitya input --text "ok" | chaitya shell run --command "cat"
+```
+
+### Work with config
+
+```bash
+chaitya config get session.backend
+chaitya config set llm.model gpt-5
+chaitya config list
+chaitya config paths
 ```
 
 ### Watch the event log
@@ -156,7 +144,7 @@ chaitya file read --path README.md | chaitya route --if-pattern "Chaitya"
 ```bash
 chaitya watch --limit 20
 chaitya watch --session demo --limit 20
-chaitya watch --live --session demo
+chaitya watch --live --session demo --timeout 30
 ```
 
 ### Handle suspended input
@@ -169,13 +157,19 @@ chaitya input respond <request_id> Alice
 
 ## Configuration
 
-By default the kernel reads configuration from `~/.chaitya/core.yaml` and stores state in `~/.chaitya/chaitya.db`.
+By default Chaitya uses:
+
+- config: `~/.chaitya/core.yaml`
+- database: `~/.chaitya/chaitya.db`
+- templates: `~/.chaitya/templates/`
+- adapter configs: `~/.chaitya/adapters/`
 
 Important environment variables:
 
 - `CHAITYA_CLI_NAME`
 - `CHAITYA_DB_PATH`
 - `CHAITYA_SESSION_BACKEND`
+- `CHAITYA_TEMPLATES_DIR`
 - `CHAITYA_ADAPTERS_CONFIG_DIR`
 - `CHAITYA_ADAPTER_PATHS`
 - `CHAITYA_ENABLED_ADAPTERS`
@@ -197,9 +191,12 @@ session:
   backend: auto
   stuck_threshold_seconds: 60
 
+templates_dir: ~/.chaitya/templates
 adapters_config_dir: ~/.chaitya/adapters
 adapter_search_paths:
   - /abs/path/to/my-adapters
+disabled_adapters:
+  - browser2
 ```
 
 ## Documentation
@@ -213,7 +210,7 @@ adapter_search_paths:
 
 ## Contributing
 
-The project is aiming for a small, understandable core. If you add capability, prefer doing it in an adapter unless the change clearly belongs to the kernel boundary itself.
+The project is trying to stay small and understandable. If a feature can live in an adapter, put it in an adapter.
 
 Start with [CONTRIBUTING.md](CONTRIBUTING.md).
 

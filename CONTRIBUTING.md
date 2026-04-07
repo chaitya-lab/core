@@ -34,8 +34,8 @@ python -m pip install -e . -e ./sdk
 ```text
 src/chaitya/core/          Kernel code
 sdk/src/chaitya_sdk/       Public SDK
-adaptors/core/             First-party adapters
-adaptors/community/        Experimental and community adapters
+adaptors/core/             System adapters
+adaptors/community/        Optional first-party and community adapters
 docs/                      User and architecture docs
 tests/                     Test suite
 ```
@@ -49,6 +49,7 @@ Kernel changes should usually be limited to:
 - lifecycle and boot logic
 - dispatch and pipeline behavior
 - session management
+- template loading and session lifecycle policies
 - event bus and persistence
 - adapter loading and validation
 - public configuration
@@ -63,6 +64,8 @@ Adapters should:
 - declare a clear contract
 - keep permissions narrow
 - include examples in command metadata
+- live in `adaptors/core/` only if core operation depends on them
+- otherwise live in `adaptors/community/`
 
 ### Documentation
 
@@ -70,7 +73,10 @@ If behavior changes, update:
 
 - `README.md`
 - the relevant files in `docs/`
+- `adaptors/README.md` if adapter layout or categories changed
 - adapter or SDK docs when the public surface changes
+
+Public docs should describe the implementation that exists in the repo today.
 
 ## Tests
 
@@ -100,6 +106,7 @@ Add or update tests for every behavior change that affects:
 - CLI behavior
 - pipeline execution
 - sessions
+- templates or session recovery behavior
 - adapter loading
 - persistence
 - cross-platform compatibility
@@ -112,6 +119,7 @@ A good change should make it easy to answer:
 - why it belongs in the kernel or adapter layer
 - how it was tested
 - whether there are platform-specific notes
+- which public docs were updated
 
 ## Style
 

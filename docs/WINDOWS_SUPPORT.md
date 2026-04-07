@@ -46,6 +46,8 @@ With `session.backend: auto`, the kernel chooses:
 - `tmux` on non-Windows systems when available
 - `psmux` on Windows when available
 
+If `psmux` is not installed on Windows, backend selection still resolves to `psmux`; session commands will then fail with a clear missing-binary error until `psmux` is installed.
+
 You can force Windows to use `psmux` explicitly:
 
 ```yaml
@@ -78,6 +80,8 @@ Shell selection order inside a Windows session:
 1. `pwsh`
 2. `powershell`
 3. `cmd.exe`
+
+Session templates and session exec gating work the same way on Windows as on other platforms.
 
 ## Smoke Test
 

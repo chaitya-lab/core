@@ -55,16 +55,18 @@ chaitya info shell
 chaitya registry list
 chaitya registry info file
 chaitya registry validate shell
+chaitya registry reload
 ```
 
 ## Sessions
 
 Sessions are persistent named terminal environments.
 
-Create a session:
+Create sessions:
 
 ```bash
 chaitya session create demo
+chaitya session create python-dev --template python-dev
 ```
 
 List sessions:
@@ -106,6 +108,14 @@ chaitya session set-env demo --key MODE --value dev
 chaitya session unset-env demo --key MODE
 ```
 
+Control whether adapter execution is allowed in a session:
+
+```bash
+chaitya session exec status demo
+chaitya session exec readonly demo
+chaitya session exec enable demo
+```
+
 Signal or kill a session:
 
 ```bash
@@ -121,6 +131,7 @@ Query recent events:
 chaitya watch --limit 20
 chaitya watch --session demo --limit 20
 chaitya watch --on session_created --limit 20
+chaitya watch --exit-after 3
 ```
 
 Search event history:
@@ -134,6 +145,7 @@ Stream live events:
 ```bash
 chaitya watch --live --session demo
 chaitya watch --live --on input_requested --timeout 30
+chaitya watch --live --session demo --exit-after 5
 ```
 
 ## Suspended Input
@@ -160,22 +172,29 @@ chaitya input respond <request_id> Alice
 
 ## L0 Ingest
 
-Create input streams from various sources (text, files, clipboard):
+Create input streams from various sources:
 
 ```bash
-chaitya input --text "hello world"           # Direct text input
-chaitya input --file data.csv                # Read file content
-chaitya input --file a.txt --file b.txt      # Multiple files (merge)
-chaitya input --file a.txt --file b.txt --merge concat  # Concatenate files
-chaitya input --file a.txt --file b.txt --merge lines   # Join with newlines
+chaitya input --text "hello world"
+chaitya input --file data.csv
+chaitya input --file a.txt --file b.txt
+chaitya input --file a.txt --file b.txt --merge concat
+chaitya input --file a.txt --file b.txt --merge lines
+chaitya input --clipboard
 ```
 
 Use with pipelines:
 
 ```bash
-chaitya input --file data.csv | shell run --command "grep pattern"
+chaitya input --file data.csv | chaitya shell run --command "grep pattern"
+```
 
 ## First-Party Adapters
+
+Repository adapter layout:
+
+- `adaptors/core/`: `file`, `shell`, `route`, `process`, `registry`
+- `adaptors/community/`: `browser`, `browser2`, `config`, `desktop`, `gui`, `test`, `watchdog`
 
 ### File
 
@@ -200,7 +219,7 @@ chaitya shell run --command "git status --short"
 The shell adapter uses the platform shell:
 
 - Unix-like systems: `$SHELL -lc`
-- Windows: PowerShell
+- Windows: PowerShell-family shell, then `cmd.exe` fallback
 
 ### Process
 
@@ -209,7 +228,7 @@ chaitya process list
 chaitya process tree
 chaitya process info --pid 1234
 chaitya process children --pid 1234
-chaitya process signal --pid 1234 --sig TERM
+chaitya process signal --pid 1234 --signal TERM
 chaitya process kill --pid 1234
 ```
 
@@ -234,16 +253,20 @@ chaitya watch --live --session demo | chaitya route --if-pattern "ERROR" --do "s
 chaitya test hello
 chaitya test ping
 chaitya test echo --message "hi"
+chaitya test ask
+chaitya test confirm
 chaitya test emit --name custom --payload "{\"ok\":true}"
 ```
 
 ### Config
 
 ```bash
-chaitya config list                 # List all config
-chaitya config get session.backend  # Get a config value
-chaitya config set browser.headless true  # Set adapter config (persisted)
-chaitya config paths                # Show config directories
+chaitya config get session.backend
+chaitya config get llm.model
+chaitya config set browser.headless true
+chaitya config list
+chaitya config list browser
+chaitya config paths
 ```
 
 ## Pipelines
@@ -271,6 +294,12 @@ Default database path:
 ~/.chaitya/chaitya.db
 ```
 
+Default templates path:
+
+```text
+~/.chaitya/templates/
+```
+
 Example configuration:
 
 ```yaml
@@ -286,9 +315,12 @@ session:
   backend: auto
   stuck_threshold_seconds: 60
 
+templates_dir: ~/.chaitya/templates
 adapters_config_dir: ~/.chaitya/adapters
 adapter_search_paths:
   - /abs/path/to/my-adapters
+disabled_adapters:
+  - browser2
 ```
 
 Useful environment variables:
@@ -296,12 +328,18 @@ Useful environment variables:
 - `CHAITYA_CLI_NAME`
 - `CHAITYA_DB_PATH`
 - `CHAITYA_SESSION_BACKEND`
+- `CHAITYA_TEMPLATES_DIR`
 - `CHAITYA_ADAPTERS_CONFIG_DIR`
 - `CHAITYA_ADAPTER_PATHS`
 - `CHAITYA_ENABLED_ADAPTERS`
 - `CHAITYA_DISABLED_ADAPTERS`
 - `CHAITYA_DEBUG_LOG`
 - `CHAITYA_LOG_LEVEL`
+
+`CHAITYA_ADAPTER_PATHS` uses the platform path separator:
+
+- `:` on macOS/Linux
+- `;` on Windows
 
 ## Running Tests
 
