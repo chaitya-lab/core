@@ -8,6 +8,7 @@ Commands:
     ping      — Emits a test event and returns pong
     echo      — Echoes back args verbatim
     ask       — Suspends requesting a name, resumes with greeting
+    confirm   — Suspends with CONFIRM type, resumes with yes/no response
     emit      — Emits a named event with payload
     session   — Tests session create/send-input/output lifecycle
 
@@ -72,6 +73,19 @@ from chaitya_sdk.types import Event
                 }
             ],
             "examples": ["chaitya test ask --name Alice"],
+        },
+        {
+            "name": "confirm",
+            "description": "Suspends with CONFIRM type, resumes with yes/no response.",
+            "params": [
+                {
+                    "name": "answer",
+                    "required": True,
+                    "description": "Yes or no",
+                    "on_missing": "suspend",
+                }
+            ],
+            "examples": ["chaitya test confirm --answer yes"],
         },
         {
             "name": "emit",
@@ -141,6 +155,31 @@ async def test_handler(
             )
         )
         return greeting.encode("utf-8"), 0
+
+    # ---- confirm (CONFIRM type suspension) ----
+    if subcommand == "confirm":
+        if "answer" not in ctx.args or not ctx.args["answer"]:
+            raise Suspension(
+                InputSpec(
+                    name="answer",
+                    prompt="Proceed with action?",
+                    input_type=InputType.CONFIRM,
+                )
+            )
+        answer = str(ctx.args["answer"]).lower()
+        if answer in ("yes", "y", "true", "1"):
+            result = "Confirmed: proceeding with action.\n"
+        else:
+            result = "Denied: action cancelled.\n"
+        await event_bus.emit(
+            Event(
+                type="test.confirm.completed",
+                source_adapter="test",
+                session_id=ctx.session_id,
+                payload={"answer": answer},
+            )
+        )
+        return result.encode("utf-8"), 0
 
     # ---- emit ----
     if subcommand == "emit":

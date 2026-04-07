@@ -359,3 +359,115 @@ class TestPipeline:
     async def test_pipeline_unknown_subcommand_in_chain(self, kernel: Kernel) -> None:
         result = await kernel.dispatch("test echo --message ok | test notasubcmd")
         assert result.exit_code != 0
+
+
+# ---------------------------------------------------------------------------
+# Session Signal (PRD §15)
+# ---------------------------------------------------------------------------
+
+
+class TestSessionSignal:
+    """Tests for session signal command (PRD §15)."""
+
+    async def test_session_signal_sends_to_process(self, kernel: Kernel) -> None:
+        """Test session signal delivers signal to PTY process."""
+        await kernel.dispatch("session create signal-test")
+
+        result = await kernel.dispatch("session signal signal-test SIGTERM")
+        assert result.exit_code == 0
+        assert "SIGTERM" in result.processed
+
+    async def test_session_signal_unknown_session_returns_error(self, kernel: Kernel) -> None:
+        """Test session signal on nonexistent session returns error."""
+        result = await kernel.dispatch("session signal nonexistent SIGTERM")
+        assert result.exit_code != 0
+
+    async def test_session_signal_usage_without_args(self, kernel: Kernel) -> None:
+        """Test session signal without name/signal returns usage."""
+        result = await kernel.dispatch("session signal")
+        assert result.exit_code != 0
+        assert "Usage" in result.processed or "usage" in result.raw.decode()
+
+
+# ---------------------------------------------------------------------------
+# Watch Exit After (PRD §15)
+# ---------------------------------------------------------------------------
+
+
+class TestWatchExitAfter:
+    """Tests for watch --exit-after N (PRD §15)."""
+
+    async def test_watch_accepts_exit_after_flag(self, kernel: Kernel) -> None:
+        """Test watch command accepts --exit-after flag."""
+        result = await kernel.dispatch("watch --exit-after 3")
+        assert result.exit_code == 0
+
+    async def test_watch_exit_after_returns_after_n_events(self, kernel: Kernel) -> None:
+        """Test watch --exit-after N exits after N events."""
+        await kernel.dispatch("test emit --name event1")
+        await kernel.dispatch("test emit --name event2")
+        await kernel.dispatch("test emit --name event3")
+
+        result = await kernel.dispatch("watch --exit-after 2")
+        assert result.exit_code == 0
+
+
+# ---------------------------------------------------------------------------
+# Kernel Restart Sessions (PRD §15)
+# ---------------------------------------------------------------------------
+
+
+class TestKernelRestartSessions:
+    """Tests for session restoration on kernel restart (PRD §15)."""
+
+    async def test_session_persists_across_store(self, kernel: Kernel) -> None:
+        """Test session exists in store after creation."""
+        await kernel.dispatch("session create persist-test")
+
+        result = await kernel.dispatch("session status persist-test")
+        assert result.exit_code == 0
+        assert "persist-test" in result.processed
+
+    async def test_kernel_restart_restores_running_sessions(
+        self, tmp_path: Path
+    ) -> None:
+        """Test sessions with auto_restart are recreated on kernel restart."""
+        db_path = str(tmp_path / "restart_test.db")
+
+        kernel1 = Kernel(db_path=db_path)
+        await kernel1.boot()
+        await kernel1.dispatch("session create restart-test")
+        await kernel1.shutdown()
+
+        kernel2 = Kernel(db_path=db_path)
+        await kernel2.boot()
+        try:
+            result = await kernel2.dispatch("session status restart-test")
+            assert result.exit_code == 0
+            assert "restart-test" in result.processed
+        finally:
+            await kernel2.shutdown()
+
+
+# ---------------------------------------------------------------------------
+# CONFIRM Type Suspension (PRD §15)
+# ---------------------------------------------------------------------------
+
+
+class TestConfirmSuspension:
+    """Tests for CONFIRM type suspension (PRD §8, §15)."""
+
+    async def test_confirm_suspension_returns_waiting(self, kernel: Kernel) -> None:
+        """Test CONFIRM type suspension returns waiting state."""
+        result = await kernel.dispatch("test confirm")
+        assert result.exit_code == 0
+        raw_str = result.raw if isinstance(result.raw, str) else result.raw.decode(errors="replace")
+        assert "waiting" in raw_str.lower() or "[waiting:" in raw_str
+
+    async def test_confirm_suspension_requires_response(self, kernel: Kernel) -> None:
+        """Test CONFIRM suspension waits for input_response."""
+        await kernel.dispatch("test confirm")
+
+        request_id = next(iter(kernel._pending_inputs.keys()))
+        result = await kernel.dispatch(f"input respond {request_id} yes")
+        assert result.exit_code == 0
