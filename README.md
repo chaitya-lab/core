@@ -1,151 +1,202 @@
 # Chaitya Core
 
-**Event-driven microkernel for personal automation.**
+Chaitya Core is a small automation kernel built around four ideas:
 
-Chaitya Core provides stable primitives — command dispatch, session management, event bus, pipeline mechanics, adapter registry, and persistent store — and nothing else. Every capability is an independently installable adapter.
+- commands are dispatched through a single CLI
+- long-running work happens inside named sessions
+- adapters provide capabilities
+- events make automation observable and composable
 
-> **Status:** Alpha — under active development. APIs will change.
+The core is intentionally narrow. It owns boot, dispatch, sessions, events, pipeline execution, adapter discovery, and persistence. Everything else should live in adapters.
 
-## Architecture
+## Status
 
-The kernel has exactly seven responsibilities:
+`0.1.0a1` alpha. The design is stable enough to build against, but interfaces may still change.
 
-1. **Boot Sequence** — deterministic startup with clear failure modes
-2. **Command Dispatch** — routes `chaitya <adapter> <subcommand>` to registered adapters
-3. **Session Management** — named running environments behind a `SessionBackend` protocol
-4. **Event Bus** — JSON-line event routing between adapters (SQLite-backed pub/sub)
-5. **Pipeline Mechanics** — L0 (ingest) → L1 (execute) → L2 (present) data flow
-6. **Adapter Registry** — discovers, validates, loads Python adapter packages
-7. **Persistent Store** — session records + event log in one SQLite database
+## What Exists Today
 
-The kernel routes. Adapters act. The kernel has **six built-in commands**: `info`, `session`, `input`, `output`, `watch`, and `registry`. All other commands come from adapters.
+Chaitya Core currently provides:
 
-`registry` is built into the kernel (no pip install needed): `registry list`, `registry info`, `registry validate` work out of the box.
+- a `chaitya` CLI
+- a `Kernel` orchestrator
+- a SQLite-backed store and event bus
+- persistent named sessions through `tmux` on Unix-like systems and `psmux` on Windows
+- a pipeline that parses and runs chained commands
+- adapter discovery from Python entry points and local workspaces
+- an SDK package for adapter authors
 
-## Core Tenets
+Built-in kernel commands:
 
-- **Everything is a stream.** Data flows through L0 → L1 → L2.
-- **Human-agent symmetry.** A human and an AI agent are indistinguishable at the kernel level.
-- **Designed for small LLMs.** All info responses under 500 tokens, predictably structured.
-- **Persistence across restarts.** Session state survives reboots.
+- `info`
+- `session`
+- `input`
+- `output`
+- `watch`
+- `registry`
+
+First-party adapters available in this repository:
+
+- `file`
+- `shell`
+- `route`
+- `process`
+- `test`
+
+Additional adapters in the workspace:
+
+- `browser`
+- `browser2`
+- `desktop`
+- `gui`
+
+## Mental Model
+
+Think of the system in layers:
+
+1. The CLI receives a command expression.
+2. The kernel parses it and routes each stage.
+3. A built-in command or adapter runs.
+4. Output is normalized by the pipeline.
+5. Events and session state are persisted.
+
+The kernel routes. Adapters do the work.
+
+## Repository Map
+
+```text
+src/chaitya/core/          Kernel implementation
+sdk/src/chaitya_sdk/       Public SDK for adapter authors
+adaptors/core/             First-party adapters used by the repo
+adaptors/community/        Experimental and community adapters
+docs/                      User and contributor documentation
+tests/                     Unit and integration tests
+plan/                      Internal planning and architecture notes
+```
 
 ## Quick Start
 
+### 1. Install from source
+
+macOS/Linux:
+
 ```bash
-# Install from source (macOS/Linux)
-pip install -e ".[dev]"
-pip install -e ./sdk
+python3 -m venv .venv
+source .venv/bin/activate
+python3 -m pip install -e ".[dev]"
+python3 -m pip install -e ./sdk
+```
 
-# Install from source (Windows/PowerShell)
-pip install -e . -e ./sdk
+Windows PowerShell:
 
-# Run the default suite
-python3 -m pytest tests -q
+```powershell
+python -m venv .venv
+.venv\Scripts\Activate.ps1
+python -m pip install -e . -e ./sdk
+```
 
-# Run the real tmux/psmux integration suite
-CHAITYA_RUN_TMUX_TESTS=1 python3 -m pytest tests/test_tmux_backend.py -q
+### 2. Check the kernel
 
-# Run (no adapters installed = functional but empty)
+```bash
 chaitya info
+chaitya registry list
 ```
 
-Current status:
-- macOS/Linux: uses `tmux` backend by default
-- Windows: uses `psmux` backend by default (auto-detected)
-- Sessions are persistent named environments with PTY support
-
-The repository ships first-party workspace adaptors for `file`, `shell`, `route`, `process`, and `test`. They are discovered directly from `adaptors/core/` during development, so the kernel can boot and execute real adaptor commands from the repo without extra packaging steps.
-
-External projects can add custom adaptors in two ways:
-
-- install Python packages that expose the `chaitya.adapters` entry point
-- point the kernel at filesystem workspaces via `adapters_config_dir` or `adapter_search_paths`
-
-Filesystem adaptor workspaces use this shape:
-
-```text
-my-adaptors/
-  mytool/
-    src/chaitya_adapter_mytool/__init__.py
-```
-
-## For Adapter Developers
-
-See [Adapter Development Guide](docs/adapters-dev.md) for the complete contract specification, examples, and best practices.
-
-Core reference docs:
-
-- [Architecture](docs/architecture.md)
-- [Usage](docs/usage.md)
+### 3. Try a few commands
 
 ```bash
-# Install the SDK
-pip install chaitya-sdk
+chaitya test hello
+chaitya shell run --command "echo hello"
+chaitya file read --path README.md
 ```
 
-```python
-from chaitya_sdk import adapter, ChaityaStream, SessionContext
+### 4. Create a persistent session
 
-@adapter(name="my-tool", subcommand="run")
-def my_tool_run(stream: ChaityaStream, ctx: SessionContext):
-    # Your logic here
-    return b"result"
+```bash
+chaitya session create demo
+chaitya session send demo --text "echo session-ok" --newline
+chaitya session output demo
 ```
 
-## Project Structure
+## Common Workflows
 
-```
-src/chaitya/core/     # The kernel
-  types.py            # All data types and enums
-  protocols.py        # 5 extension-point protocols
-  event_bus.py        # SQLite-backed event bus
-  store.py            # Persistent store
-  pipeline.py         # Pipeline orchestrator
-  session.py          # Session management
-  registry.py         # Adapter registry & loader
-  kernel.py           # Main kernel orchestrator
-  config.py           # Configuration
-  cli.py              # CLI entry point
-sdk/                  # chaitya-sdk package (separate pip install)
-tests/                # Test suite
-docs/                 # Documentation
-adaptors/             # Future first-party and community adaptor workspace
+### Run one-off commands
+
+```bash
+chaitya shell run --command "git status --short"
+chaitya process list
 ```
 
-## Five Extension Points
+### Use the command pipeline
 
-All swappable via `core.yaml`:
+```bash
+chaitya file read --path README.md | chaitya route --if-pattern "Chaitya"
+```
 
-| Protocol | Default | Purpose |
-|---|---|---|
-| `SessionBackend` | tmux (macOS/Linux), psmux (Windows) | Named session management |
-| `EventBus` | SQLite | Pub/sub event routing |
-| `Store` | SQLite | Session records + event log |
-| `PipelineOrchestrator` | Built-in | L0→L1→L2 data flow |
-| `AdapterLoader` | Built-in | Adapter discovery & loading |
+### Watch the event log
+
+```bash
+chaitya watch --limit 20
+chaitya watch --session demo --limit 20
+chaitya watch --live --session demo
+```
+
+### Handle suspended input
+
+```bash
+chaitya test ask
+chaitya input list
+chaitya input respond <request_id> Alice
+```
+
+## Configuration
+
+By default the kernel reads configuration from `~/.chaitya/core.yaml` and stores state in `~/.chaitya/chaitya.db`.
+
+Important environment variables:
+
+- `CHAITYA_CLI_NAME`
+- `CHAITYA_DB_PATH`
+- `CHAITYA_SESSION_BACKEND`
+- `CHAITYA_ADAPTERS_CONFIG_DIR`
+- `CHAITYA_ADAPTER_PATHS`
+- `CHAITYA_ENABLED_ADAPTERS`
+- `CHAITYA_DISABLED_ADAPTERS`
+- `CHAITYA_DEBUG_LOG`
+- `CHAITYA_LOG_LEVEL`
+
+Example `core.yaml`:
+
+```yaml
+kernel:
+  cli_name: chaitya
+  log_level: info
+
+store:
+  path: ~/.chaitya/chaitya.db
+
+session:
+  backend: auto
+  stuck_threshold_seconds: 60
+
+adapters_config_dir: ~/.chaitya/adapters
+adapter_search_paths:
+  - /abs/path/to/my-adapters
+```
+
+## Documentation
+
+- [Usage](docs/usage.md)
+- [Architecture](docs/architecture.md)
+- [Adapter Development](docs/adapters-dev.md)
+- [Windows Support](docs/WINDOWS_SUPPORT.md)
+- [SDK Guide](sdk/README.md)
+- [Contributing](CONTRIBUTING.md)
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, coding standards, and contribution guidelines. Adapter authors should also read [docs/adapters-dev.md](docs/adapters-dev.md). Repository direction for future packages lives in [ROADMAP.md](ROADMAP.md) and [adaptors/README.md](adaptors/README.md).
+The project is aiming for a small, understandable core. If you add capability, prefer doing it in an adapter unless the change clearly belongs to the kernel boundary itself.
 
-## Interactive Flow
-
-The kernel supports two interactive patterns:
-
-- tmux-backed session control with `session send`, `session output`, `session signal`, `session set-env`, and `session unset-env`
-- adaptor suspension/resume with `input list` and `input respond <request_id> <value>`
-
-## Streaming & Automation
-
-The pipeline supports async streaming handlers. `watch --live` streams events in real-time through the pipeline, enabling automation:
-
-```bash
-# Watch session events, route by pattern, trigger actions
-chaitya watch --live --session my-session | \
-  chaitya route --if-pattern "ERROR" --do "session send alert-session --text 'notify-send Error!'"
-```
-
-`route --do` emits a `route.action_requested` event when conditions match. The kernel dispatches the specified command asynchronously.
+Start with [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 

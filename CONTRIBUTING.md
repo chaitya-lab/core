@@ -1,66 +1,121 @@
 # Contributing
 
+This repository is trying to produce a small, dependable core. Contributions should improve clarity as much as capability.
+
+## Principles
+
+- keep the kernel small
+- prefer adapters over core expansion
+- use `chaitya_sdk` as the adapter boundary
+- preserve predictable boot, dispatch, and shutdown behavior
+- keep docs aligned with implementation
+
 ## Development Setup
 
-Chaitya Core currently targets Python 3.11+.
+### macOS/Linux
 
 ```bash
+python3 -m venv .venv
+source .venv/bin/activate
 python3 -m pip install -e ".[dev]"
 python3 -m pip install -e ./sdk
 ```
 
-Run the test suite from the repository root:
+### Windows PowerShell
+
+```powershell
+python -m venv .venv
+.venv\Scripts\Activate.ps1
+python -m pip install -e . -e ./sdk
+```
+
+## Repository Layout
+
+```text
+src/chaitya/core/          Kernel code
+sdk/src/chaitya_sdk/       Public SDK
+adaptors/core/             First-party adapters
+adaptors/community/        Experimental and community adapters
+docs/                      User and architecture docs
+tests/                     Test suite
+```
+
+## Working Rules
+
+### Kernel Changes
+
+Kernel changes should usually be limited to:
+
+- lifecycle and boot logic
+- dispatch and pipeline behavior
+- session management
+- event bus and persistence
+- adapter loading and validation
+- public configuration
+
+If a feature can reasonably live in an adapter, it should.
+
+### Adapter Changes
+
+Adapters should:
+
+- import from `chaitya_sdk`
+- declare a clear contract
+- keep permissions narrow
+- include examples in command metadata
+
+### Documentation
+
+If behavior changes, update:
+
+- `README.md`
+- the relevant files in `docs/`
+- adapter or SDK docs when the public surface changes
+
+## Tests
+
+Run the main suite:
 
 ```bash
-python3 -m pytest tests -q
+pytest tests -q
 ```
 
-Run real tmux integration tests on macOS/Linux:
+Run session backend integration tests when changing session behavior:
+
+macOS/Linux:
 
 ```bash
-CHAITYA_RUN_TMUX_TESTS=1 python3 -m pytest tests/test_tmux_backend.py -q
+CHAITYA_RUN_TMUX_TESTS=1 pytest tests/test_tmux_backend.py tests/test_kernel_tmux_integration.py -q
 ```
 
-If you are developing external adaptors from a local folder, point the kernel at that workspace with either:
+Windows PowerShell:
 
-```bash
-export CHAITYA_ADAPTER_PATHS="/abs/path/to/my-adaptors"
+```powershell
+$env:CHAITYA_RUN_TMUX_TESTS = "1"
+pytest tests/test_tmux_backend.py tests/test_kernel_tmux_integration.py -q
 ```
 
-or `core.yaml`:
+Add or update tests for every behavior change that affects:
 
-```yaml
-adapters_config_dir: "~/.chaitya/adapters"
-adapter_search_paths:
-  - "/abs/path/to/my-adaptors"
-```
-
-## Architecture Guardrails
-
-- Keep the kernel small. New capabilities belong in adapters unless they are one of the seven kernel responsibilities in `prd.md`.
-- Adapters should import only from `chaitya_sdk`, never from `chaitya.core`.
-- Prefer protocol boundaries over direct coupling between subsystems.
-- Preserve deterministic boot and shutdown behavior.
-- Prefer adding capabilities through adaptors or config-driven discovery before changing the kernel itself.
-
-## macOS Workflow
-
-- The default macOS/Linux substrate is `TmuxSessionBackend`.
-- `LocalProcessBackend` remains for fallback and focused unit tests.
-- Changes in session behavior should include integration tests that exercise real `tmux` sessions instead of mocks.
-- Before proposing tmux-backed features, verify behavior on macOS with actual subprocess or tmux execution.
-
-## Quality Bar
-
-- Add or update tests for every behavior change.
-- Keep README and contributor docs aligned with the implementation.
-- Prefer small, reviewable commits.
+- CLI behavior
+- pipeline execution
+- sessions
+- adapter loading
+- persistence
+- cross-platform compatibility
 
 ## Pull Requests
 
-Include:
+A good change should make it easy to answer:
 
-1. The problem statement.
-2. The architectural constraint or PRD section affected.
-3. Test evidence, including the exact command you ran.
-4. Any platform-specific notes for macOS, Linux, or Windows.
+- what changed
+- why it belongs in the kernel or adapter layer
+- how it was tested
+- whether there are platform-specific notes
+
+## Style
+
+- keep changes focused
+- prefer clear names over clever abstractions
+- preserve cross-platform behavior where possible
+- avoid expanding the core surface without a strong reason

@@ -1,92 +1,150 @@
 # Usage
 
-## Setup (Windows/PowerShell)
+This guide covers the current CLI surface and the most useful workflows.
+
+## Install
+
+### macOS/Linux
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python3 -m pip install -e ".[dev]"
+python3 -m pip install -e ./sdk
+```
+
+### Windows PowerShell
 
 ```powershell
-# Create virtual environment
 python -m venv .venv
-
-# Activate it
 .venv\Scripts\Activate.ps1
-
-# Install chaitya core and SDK
-pip install -e . -e ./sdk
-
-# Install playwright for browser tests (optional)
-pip install playwright
-playwright install chromium
-
-# Run tests
-pytest tests\test_tmux_backend.py -v
+python -m pip install -e . -e ./sdk
 ```
 
-## Setup (macOS/Linux)
+## Basic CLI
+
+Show help:
 
 ```bash
-# Create virtual environment
-python3 -m venv .venv
-
-# Activate it
-source .venv/bin/activate
-
-# Install chaitya core and SDK
-pip install -e . -e ./sdk
-
-# Run tests
-pytest tests/test_tmux_backend.py -v
+chaitya --help
 ```
 
-## Quick Start
+Show version:
 
 ```bash
-# Show help and installed adapters
-chaitya info
+chaitya --version
+```
 
-# Or with --memory to skip database
+Use an in-memory database:
+
+```bash
 chaitya --memory info
+```
+
+Use a custom database path:
+
+```bash
+chaitya --db ./chaitya.db info
+```
+
+## Inspect The System
+
+```bash
+chaitya info
+chaitya info shell
+chaitya registry list
+chaitya registry info file
+chaitya registry validate shell
 ```
 
 ## Sessions
 
+Sessions are persistent named terminal environments.
+
 Create a session:
 
 ```bash
-chaitya session create dev
+chaitya session create demo
+```
+
+List sessions:
+
+```bash
+chaitya session list
+```
+
+Check session status:
+
+```bash
+chaitya session status demo
 ```
 
 Send input:
 
 ```bash
-chaitya session send-input dev "python3" --newline
+chaitya session send demo --text "echo hello"
+chaitya session send demo --newline
 ```
 
-Read output:
+Use keys for simple control input:
 
 ```bash
-chaitya session output dev --idle-timeout 0.4
+chaitya session send demo --key enter
+chaitya session send demo --key tab
 ```
 
-Set environment:
+Read recent output:
 
 ```bash
-chaitya session set-env dev API_KEY=value
+chaitya session output demo --idle-timeout 0.4
 ```
 
-## Watch Events
-
-Recent session events:
+Manage environment variables:
 
 ```bash
-chaitya watch --session dev --limit 20
+chaitya session set-env demo --key MODE --value dev
+chaitya session unset-env demo --key MODE
 ```
 
-Filter by type:
+Signal or kill a session:
 
 ```bash
-chaitya watch --on input_requested --limit 20
+chaitya session signal demo SIGINT
+chaitya session kill demo
 ```
 
-## Suspension Flow
+## Events
+
+Query recent events:
+
+```bash
+chaitya watch --limit 20
+chaitya watch --session demo --limit 20
+chaitya watch --on session_created --limit 20
+```
+
+Search event history:
+
+```bash
+chaitya watch --search demo --limit 20
+```
+
+Stream live events:
+
+```bash
+chaitya watch --live --session demo
+chaitya watch --live --on input_requested --timeout 30
+```
+
+## Suspended Input
+
+Some adapters can pause and request structured input.
+
+Trigger an example request:
+
+```bash
+chaitya test ask
+```
 
 List pending requests:
 
@@ -94,24 +152,150 @@ List pending requests:
 chaitya input list
 ```
 
-Respond:
+Respond to a request:
 
 ```bash
-chaitya input respond <request_id> yes
+chaitya input respond <request_id> Alice
 ```
 
-## Custom Adaptors
+## First-Party Adapters
 
-Configure filesystem discovery with:
+### File
+
+```bash
+chaitya file read --path README.md
+chaitya file write --path notes.txt --text "hello"
+```
+
+If the write would overwrite an existing file or target a dangerous path, add confirmation:
+
+```bash
+chaitya file write --path notes.txt --text "replace" --confirm
+```
+
+### Shell
+
+```bash
+chaitya shell run --command "pwd"
+chaitya shell run --command "git status --short"
+```
+
+The shell adapter uses the platform shell:
+
+- Unix-like systems: `$SHELL -lc`
+- Windows: PowerShell
+
+### Process
+
+```bash
+chaitya process list
+chaitya process tree
+chaitya process info --pid 1234
+chaitya process children --pid 1234
+chaitya process signal --pid 1234 --sig TERM
+chaitya process kill --pid 1234
+```
+
+### Route
+
+`route` is most useful inside pipelines:
+
+```bash
+chaitya file read --path README.md | chaitya route --if-pattern "Chaitya"
+chaitya shell run --command "make test" | chaitya route --if-exit 0
+```
+
+Trigger an action when a condition matches:
+
+```bash
+chaitya watch --live --session demo | chaitya route --if-pattern "ERROR" --do "session send alert --text notify --newline"
+```
+
+### Test
+
+```bash
+chaitya test hello
+chaitya test ping
+chaitya test echo --message "hi"
+chaitya test emit --name custom --payload "{\"ok\":true}"
+```
+
+## Pipelines
+
+Chaitya supports command chaining through the pipeline orchestrator.
+
+Examples:
+
+```bash
+chaitya file read --path README.md | chaitya shell run --command "grep Kernel"
+chaitya shell run --command "printf 'ok\n'" | chaitya route --if-pattern ok
+```
+
+## Configuration
+
+Default config path:
+
+```text
+~/.chaitya/core.yaml
+```
+
+Default database path:
+
+```text
+~/.chaitya/chaitya.db
+```
+
+Example configuration:
 
 ```yaml
-adapters_config_dir: "~/.chaitya/adapters"
+kernel:
+  cli_name: chaitya
+  debug_log: ~/.chaitya/logs/kernel.log
+  log_level: info
+
+store:
+  path: ~/.chaitya/chaitya.db
+
+session:
+  backend: auto
+  stuck_threshold_seconds: 60
+
+adapters_config_dir: ~/.chaitya/adapters
 adapter_search_paths:
-  - "/abs/path/to/my-adaptors"
+  - /abs/path/to/my-adapters
 ```
 
-Or with an environment variable:
+Useful environment variables:
+
+- `CHAITYA_CLI_NAME`
+- `CHAITYA_DB_PATH`
+- `CHAITYA_SESSION_BACKEND`
+- `CHAITYA_ADAPTERS_CONFIG_DIR`
+- `CHAITYA_ADAPTER_PATHS`
+- `CHAITYA_ENABLED_ADAPTERS`
+- `CHAITYA_DISABLED_ADAPTERS`
+- `CHAITYA_DEBUG_LOG`
+- `CHAITYA_LOG_LEVEL`
+
+## Running Tests
+
+Full suite:
 
 ```bash
-export CHAITYA_ADAPTER_PATHS="/abs/path/to/my-adaptors"
+pytest tests -q
+```
+
+tmux or psmux integration tests:
+
+macOS/Linux:
+
+```bash
+CHAITYA_RUN_TMUX_TESTS=1 pytest tests/test_tmux_backend.py tests/test_kernel_tmux_integration.py -q
+```
+
+Windows PowerShell:
+
+```powershell
+$env:CHAITYA_RUN_TMUX_TESTS = "1"
+pytest tests/test_tmux_backend.py tests/test_kernel_tmux_integration.py -q
 ```

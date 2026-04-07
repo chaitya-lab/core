@@ -1,92 +1,252 @@
 # Architecture
 
-## Goal
+This document describes the code that exists in the repository today.
 
-Chaitya Core is a small event-driven kernel for automation systems.
+## Design Goal
 
-The kernel should stay responsible for:
+Chaitya Core is a small kernel for automation systems. It is responsible for:
 
 1. boot and shutdown
 2. command dispatch
-3. session management
+3. session lifecycle
 4. event routing
 5. pipeline execution
-6. adaptor discovery and loading
+6. adapter discovery and loading
 7. persistence
 
-Everything else should prefer to live in adaptors.
+Anything outside those responsibilities should usually be implemented as an adapter.
 
 ## Main Runtime Pieces
 
-- `Kernel`: top-level orchestrator (handles 6 built-in commands: info, session, input, output, watch, registry)
-- `SessionManager`: session lifecycle and state
-- `SessionBackend`: concrete substrate — tmux on macOS/Linux, psmux on Windows. Both implement the same Protocol — the kernel session management is identical.
-- `SqliteEventBus`: event persistence and pub/sub (stream events like stdout_chunk NOT persisted to DB)
-- `SqliteStore`: session records, events, and pending suspension requests
-- `PipelineOrchestrator`: command parsing and execution flow
-- `AdapterRegistry`: discovery from entry points and configured filesystem paths
+### `Kernel`
 
-## Adaptor Model
+`src/chaitya/core/kernel.py` composes the system and owns the runtime lifecycle:
 
-Adaptors are discovered from:
+- open store and event bus
+- discover and load adapters
+- restore sessions
+- register command handlers
+- dispatch command expressions
+- shut everything down cleanly
 
-- installed Python entry points in `chaitya.adapters`
-- workspace folders under `adaptors/`
-- configured filesystem paths from `adapters_config_dir` and `adapter_search_paths`
+Built-in kernel commands:
 
-Adaptors should import only from `chaitya_sdk`.
+- `info`
+- `session`
+- `input`
+- `output`
+- `watch`
+- `registry`
 
-## Interactive Flows
+Everything else is routed to adapters.
 
-There are two interaction paths:
+### `SessionManager`
+
+`src/chaitya/core/session_manager.py` manages named sessions:
+
+- create, attach, detach, kill, and signal sessions
+- send input and read output
+- persist session metadata
+- restore sessions after boot
+- detect stuck or dead sessions
+
+Session states used by the system:
+
+- `idle`
+- `busy`
+- `waiting`
+- `stuck`
+- `dead`
+
+### Session Backends
+
+The session backend is swappable behind a common protocol.
+
+- `tmux` is the default path on Unix-like systems
+- `psmux` is the default path on Windows
+
+Both backends expose the same session operations to the rest of the kernel.
+
+### `SqliteStore`
+
+`src/chaitya/core/store.py` persists:
+
+- session records
+- event history
+- pending suspended-input state
+
+SQLite is the current built-in storage backend.
+
+### `SqliteEventBus`
+
+`src/chaitya/core/event_bus.py` provides:
+
+- event emission
+- live subscriptions
+- event history queries
+
+The event bus is also backed by SQLite today.
+
+### `PipelineOrchestrator`
+
+`src/chaitya/core/pipeline.py` is responsible for:
+
+- parsing command chains
+- wiring stages together
+- executing handlers
+- normalizing output in the L2 presentation step
+
+The pipeline is where command expressions such as pipes are interpreted.
+
+### `AdapterRegistry`
+
+`src/chaitya/core/registry.py` discovers and validates adapters from:
+
+- Python entry points in `chaitya.adapters`
+- configured filesystem search paths
+- local development workspaces
+
+The registry also handles dependency ordering and validation.
+
+## Command Flow
+
+At a high level:
+
+1. The CLI builds a command expression.
+2. The kernel asks the pipeline to parse it.
+3. The pipeline invokes built-in handlers or adapter handlers.
+4. Output is normalized into a `CommandOutput`.
+5. Events and session state changes are persisted.
+
+For a command such as:
+
+```bash
+chaitya session create demo
+```
+
+the flow is:
+
+1. CLI starts the kernel
+2. kernel dispatches `session`
+3. session handler calls `SessionManager.create()`
+4. the backend creates the real terminal session
+5. the store and event bus record the result
+
+## Adapter Model
+
+Adapters are packages that expose a contract and a handler.
+
+The repository supports two common paths:
+
+- installed Python packages using the `chaitya.adapters` entry-point group
+- local adapter workspaces discovered from configured paths
+
+Adapter authors should import from `chaitya_sdk`, not from `chaitya.core`.
+
+## SDK Boundary
+
+The SDK in `sdk/src/chaitya_sdk/` is the public surface for adapter development.
+
+It exposes:
+
+- `@adapter`
+- stream and context types
+- event helpers
+- permission checks
+- suspension types
+- contract and command definition types
+- `SessionRunner` for adapters that need session-backed execution
+
+This keeps adapter code isolated from kernel internals.
+
+## Interactive Patterns
+
+There are two distinct interaction models.
 
 ### Session Interaction
 
-PTY-style control over a running subprocess in a named session.
+This is PTY-style interaction with a named shell session:
 
-Commands:
+- `session create`
+- `session send`
+- `session output`
+- `session signal`
+- `session set-env`
+- `session unset-env`
+- `session kill`
 
-- `session send` — send text, newline, or key to session
-- `session output` — read session terminal output
-- `session signal` — send signals (SIGTERM, SIGINT, etc.)
-- `session set-env` / `session unset-env` — manage environment variables
+Use this when a real terminal process must stay alive across commands.
 
-Use this for tools that prompt on stdin/stdout inside tmux.
+### Adapter Suspension
 
-### Adaptor Suspension
-
-Kernel-managed logical input for adaptor handlers.
+An adapter can pause and request input by raising `Suspension(InputSpec(...))`.
 
 Flow:
 
-1. adaptor needs missing input → suspends
-2. kernel emits `input_requested`
-3. user responds with `input respond <request_id> <value>`
-4. kernel resumes adaptor with injected value
+1. adapter requests input
+2. kernel stores the pending request and emits `input_requested`
+3. user or client responds with `input respond <request_id> <value>`
+4. kernel resumes the adapter and emits `input_response`
 
-## Streaming Pipeline
+Use this when the adapter needs structured input rather than terminal input.
 
-The pipeline supports async streaming handlers. `watch --live` streams events through the pipeline:
+## Events
 
-```bash
-chaitya watch --live --session my-session | \
-  chaitya route --if-pattern "ERROR" --do "session send alert --text 'Error!'"
-```
+Events make the system observable and automatable.
 
-`route --do` triggers actions when patterns match.
+Examples include:
 
-## System Adaptors
+- `kernel_started`
+- `kernel_shutting_down`
+- `session_created`
+- `session_state_changed`
+- `input_requested`
+- `input_response`
+- adapter-defined events
 
-Core adapters shipped with the kernel:
+The `watch` command queries history or streams events live.
 
-- `file` — read/write files
-- `shell` — run shell commands
-- `route` — filter content, trigger actions
-- `process` — system process management
-- `test` — testing utilities
+## First-Party Adapters In This Repository
 
-Community adapters:
+Core workspace adapters:
 
-- `browser`, `browser2` — browser automation
-- `desktop` — screenshot, clipboard, accessibility tree
-- `gui` — mouse/keyboard control
+- `file`: read and write local text files
+- `shell`: execute shell commands
+- `route`: filter pipeline output and emit actions
+- `process`: inspect and control OS processes
+- `test`: exercise kernel features during development
+
+Additional workspace adapters:
+
+- `browser`
+- `browser2`
+- `desktop`
+- `gui`
+
+## Configuration Surface
+
+Configuration is loaded in this order:
+
+1. built-in defaults
+2. `core.yaml`
+3. environment variables
+
+Important areas:
+
+- `kernel`
+- `store`
+- `event_bus`
+- `session`
+- adapter search paths and enable/disable lists
+
+## Current Boundaries
+
+A few principles define the current architecture:
+
+- the kernel should stay small
+- adapter code should go through the SDK
+- sessions are a first-class primitive
+- persistence is built in, not bolted on
+- events are part of normal operation, not an afterthought
+
+If a proposed feature does not need one of those kernel boundaries, it probably belongs in an adapter.

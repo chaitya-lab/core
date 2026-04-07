@@ -1,8 +1,22 @@
-# File Adaptor
+# File Adapter
 
-First-party file adaptor for Chaitya Core.
+First-party adapter for reading and writing local UTF-8 text files.
 
-Current commands:
+## Commands
 
-- `file read --path <path>`
-- `file write --path <path> --text <text>`
+```bash
+chaitya file read --path README.md
+chaitya file write --path notes.txt --text "hello"
+```
+
+If the write targets an existing file or a dangerous location, the adapter asks for explicit confirmation:
+
+```bash
+chaitya file write --path notes.txt --text "replace" --confirm
+```
+
+## Notes
+
+- permissions are enforced through the SDK
+- reads and writes are limited to declared paths
+- writes create parent directories when needed
