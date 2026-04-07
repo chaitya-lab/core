@@ -621,7 +621,7 @@ def _load_desktop_adapter():
 
     spec = importlib.util.spec_from_file_location(
         "desktop_adapter",
-        "adaptors/core/desktop/src/chaitya_adapter_desktop/__init__.py",
+        "adaptors/community/desktop/src/chaitya_adapter_desktop/__init__.py",
     )
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
@@ -709,7 +709,7 @@ def _load_gui_adapter():
 
     spec = importlib.util.spec_from_file_location(
         "gui_adapter",
-        "adaptors/core/gui/src/chaitya_adapter_gui/__init__.py",
+        "adaptors/community/gui/src/chaitya_adapter_gui/__init__.py",
     )
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
