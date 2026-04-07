@@ -220,6 +220,15 @@ chaitya test echo --message "hi"
 chaitya test emit --name custom --payload "{\"ok\":true}"
 ```
 
+### Config
+
+```bash
+chaitya config list                 # List all config
+chaitya config get session.backend  # Get a config value
+chaitya config set browser.headless true  # Set adapter config (persisted)
+chaitya config paths                # Show config directories
+```
+
 ## Pipelines
 
 Chaitya supports command chaining through the pipeline orchestrator.
