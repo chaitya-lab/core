@@ -91,6 +91,64 @@ logger = logging.getLogger(__name__)
 # The six kernel-dispatched commands (PRD §5)
 KERNEL_COMMANDS = frozenset({"info", "session", "input", "output", "watch", "registry"})
 
+KERNEL_COMMAND_INFO = {
+    "info": {
+        "description": "Show system or adapter information",
+        "commands": {
+            "info": "Show this overview",
+            "info <adapter>": "Show adapter contract details",
+            "info --kernel": "Show kernel status",
+        },
+    },
+    "session": {
+        "description": "Manage named running environments",
+        "commands": {
+            "session list": "List all sessions",
+            "session create <name>": "Create a new session",
+            "session status <name>": "Show session state",
+            "session attach <name>": "Attach to session terminal",
+            "session detach": "Detach from current session",
+            "session output <name>": "Show recent session output",
+            "session send <name> <text>": "Send input to session",
+            "session set-env <name> <key> <value>": "Set environment variable",
+            "session signal <name> <signal>": "Send signal (TERM, KILL, INT, HUP)",
+            "session kill <name>": "Terminate session",
+        },
+    },
+    "input": {
+        "description": "Handle interactive input requests",
+        "commands": {
+            "input list": "List pending input requests",
+            "input respond <id> <value>": "Respond to a pending request",
+        },
+    },
+    "output": {
+        "description": "Format and filter command output",
+        "commands": {
+            "output --filter <pattern>": "Filter output by pattern",
+            "output --format json|text": "Set output format",
+        },
+    },
+    "watch": {
+        "description": "Monitor events in real-time",
+        "commands": {
+            "watch --all": "Watch all events",
+            "watch --session <name>": "Watch session events",
+            "watch --search <query>": "Search event log",
+            "watch --live --session <name>": "Live stream session events",
+        },
+    },
+    "registry": {
+        "description": "Manage adapter registry",
+        "commands": {
+            "registry list": "List installed adapters",
+            "registry disable <name>": "Disable an adapter",
+            "registry enable <name>": "Enable an adapter",
+            "registry validate <name>": "Validate adapter contract",
+        },
+    },
+}
+
 # System adapters whose load failure halts boot (PRD §3.6)
 DEFAULT_SYSTEM_ADAPTERS = frozenset({"file", "shell", "route", "process", "registry"})
 
@@ -1043,7 +1101,7 @@ class Kernel:
         args = ctx.env
         adapter_name = args.get("__subcommand__", "")
 
-        if adapter_name == "--kernel" or args.get("--kernel"):
+        if adapter_name == "--kernel" or args.get("kernel"):
             sessions = await self._store.list_sessions()
             active = [s for s in sessions if s.state.value != "dead"]
             info = {
@@ -1078,6 +1136,17 @@ class Kernel:
                 if c.depends_on:
                     lines.append(f"Dependencies: {', '.join(c.depends_on)}")
                 return "\n".join(lines).encode("utf-8"), 0
+
+        if adapter_name in KERNEL_COMMAND_INFO:
+            info = KERNEL_COMMAND_INFO[adapter_name]
+            lines = [
+                f"Kernel Command: {adapter_name}",
+                f"Description: {info['description']}",
+                "Commands:",
+            ]
+            for cmd, desc in info["commands"].items():
+                lines.append(f"  {cmd:32s} {desc}")
+            return "\n".join(lines).encode("utf-8"), 0
 
         # Default: compact overview for LLM consumption
         sessions = await self._store.list_sessions()
