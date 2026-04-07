@@ -17,6 +17,9 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
+import mimetypes
+import os
+import subprocess
 import sys
 import time
 import uuid
@@ -1296,7 +1299,19 @@ class Kernel:
     async def _handle_input(
         self, input_stream: ChaityaStream, ctx: PipelineContext
     ) -> tuple[bytes, int]:
-        """Handle ``input <options>`` — provide input to a suspended command."""
+        """Handle ``input <options>`` — L0 Ingest and input request responses.
+
+        L0 Ingest (PRD §4):
+            input --text "content"          Create stream from text
+            input --file <path>             Read file into stream
+            input --file <path> --type <m>  Read file with specified MIME type
+            input --clipboard               Read clipboard into stream
+            input --file a.txt --file b.txt --merge concat  Merge multiple files
+
+        Input Request Responses:
+            input list                      List pending input requests
+            input respond <id> <value>      Respond to a pending request
+        """
         sub = ctx.env.get("__subcommand__", "list")
         positional = ctx.env.get("__args__", [])
 
@@ -1317,7 +1332,164 @@ class Kernel:
                 return b"Usage: input respond <request_id> <value>", 1
             return await self._resume_pending_input(request_id, value)
 
+        if sub in ("list", "respond"):
+            pass
+        elif sub == "ingest":
+            return await self._handle_input_ingest(ctx)
+        elif ctx.env.get("text") or ctx.env.get("file") or ctx.env.get("clipboard"):
+            return await self._handle_input_ingest(ctx)
+
         return f"Unknown input subcommand: {sub}".encode(), 1
+
+    async def _handle_input_ingest(self, ctx: PipelineContext) -> tuple[bytes, int]:
+        """Handle L0 Ingest — create ChaityaStream from various sources."""
+        text = self._strip_quotes(ctx.env.get("text", ""))
+        clipboard = ctx.env.get("clipboard")
+        declared_type = self._strip_quotes(ctx.env.get("type", ""))
+        merge = self._strip_quotes(ctx.env.get("merge", "concat"))
+
+        files = self._extract_multiple_flags(ctx.env, "file")
+        clipboard_flag = ctx.env.get("clipboard")
+
+        content = b""
+        mime_type = declared_type or "text/plain"
+        sources: list[str] = []
+
+        if text:
+            content = text.encode("utf-8")
+            mime_type = "text/plain"
+            sources.append("<text>")
+
+        if clipboard:
+            content = await self._read_clipboard()
+            mime_type = "text/plain"
+            sources.append("<clipboard>")
+
+        if files:
+            merged = b""
+            for file_path in files:
+                try:
+                    path = Path(file_path)
+                    if not path.exists():
+                        return f"[error] file not found: {file_path}\n".encode(), 1
+                    file_content = path.read_bytes()
+                    merged += file_content
+                    sources.append(str(path))
+                except PermissionError:
+                    return f"[error] permission denied: {file_path}\n".encode(), 1
+                except Exception as exc:
+                    return f"[error] cannot read {file_path}: {exc}\n".encode(), 1
+
+            if merge == "concat":
+                content = merged
+            elif merge == "lines":
+                content = b"\n".join(merged.splitlines(keepends=True))
+            elif merge == "json":
+                import json
+                content = json.dumps({
+                    "parts": [str(len(files)), merged.decode("utf-8", errors="replace")]
+                }).encode()
+            else:
+                content = merged
+
+            if not declared_type:
+                mime_type = self._detect_mime_type(files[0])
+
+        if not content:
+            return b"[error] no input source specified (--text, --file, or --clipboard)\n", 1
+
+        ingest_stream = ChaityaStream(
+            content=content,
+            declared_type=mime_type,
+            size_bytes=len(content),
+            source=", ".join(sources) if sources else "",
+        )
+
+        ctx.input_stream = ingest_stream
+        return content, 0
+
+    def _strip_quotes(self, value: str) -> str:
+        """Strip leading/trailing quotes from a string value."""
+        if not value:
+            return value
+        if len(value) >= 2 and (
+            (value.startswith('"') and value.endswith('"'))
+            or (value.startswith("'") and value.endswith("'"))
+        ):
+            return value[1:-1]
+        return value
+
+    def _extract_multiple_flags(self, env: dict[str, Any], flag: str) -> list[str]:
+        """Extract multiple values for a flag from raw_args (handles duplicates)."""
+        raw_args = env.get("__args__", [])
+        values = []
+        i = 0
+        while i < len(raw_args):
+            arg = raw_args[i]
+            if arg == f"--{flag}":
+                if i + 1 < len(raw_args):
+                    next_val = raw_args[i + 1]
+                    if not next_val.startswith("--"):
+                        values.append(self._strip_quotes(next_val))
+                        i += 2
+                        continue
+            elif arg.startswith(f"--{flag}="):
+                values.append(self._strip_quotes(arg[len(flag) + 3 :]))
+            i += 1
+        return values
+
+    def _detect_mime_type(self, file_path: str) -> str:
+        """Detect MIME type from file extension."""
+        mime, _ = mimetypes.guess_type(file_path)
+        return mime or "application/octet-stream"
+
+    async def _read_clipboard(self) -> bytes:
+        """Read content from system clipboard."""
+        system = os.name
+
+        if system == "posix":
+            try:
+                result = subprocess.run(
+                    ["pbpaste"], capture_output=True, timeout=5
+                )
+                if result.returncode == 0:
+                    return result.stdout
+            except (FileNotFoundError, subprocess.TimeoutExpired):
+                pass
+
+            for cmd in ["xclip", "-selection", "clipboard", "-o", "xsel", "--clipboard", "--output"]:
+                try:
+                    result = subprocess.run(cmd.split(), capture_output=True, timeout=5)
+                    if result.returncode == 0:
+                        return result.stdout
+                except (FileNotFoundError, subprocess.TimeoutExpired):
+                    continue
+
+        elif system == "nt":
+            try:
+                import platform
+                ps_version = platform.version()
+                if int(platform.version().split(".")[0]) >= 10:
+                    result = subprocess.run(
+                        ["powershell", "-Command", "Get-Clipboard"],
+                        capture_output=True, timeout=5
+                    )
+                    if result.returncode == 0:
+                        return result.stdout
+            except (FileNotFoundError, subprocess.TimeoutExpired):
+                pass
+
+            try:
+                result = subprocess.run(
+                    ["powershell", "-Command", "Get-Content", "clipboard:"],
+                    capture_output=True, timeout=5
+                )
+                if result.returncode == 0:
+                    return result.stdout
+            except (FileNotFoundError, subprocess.TimeoutExpired):
+                pass
+
+        return b"[error] clipboard not available on this platform\n"
 
     async def _handle_output(
         self, input_stream: ChaityaStream, ctx: PipelineContext

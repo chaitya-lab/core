@@ -388,3 +388,121 @@ class TestDispatch:
                 kernel._event_bus.emit = original_emit
         finally:
             await kernel.shutdown()
+
+
+# ---------------------------------------------------------------------------
+# L0 Ingest Tests
+# ---------------------------------------------------------------------------
+
+
+class TestL0Ingest:
+    """Tests for L0 Ingest commands (input --text, --file, --clipboard, --merge)."""
+
+    async def test_input_text_simple(self, kernel: Kernel) -> None:
+        """input --text creates a stream with the text content."""
+        output = await kernel.dispatch('input --text "hello world"')
+        assert output.exit_code == 0
+        assert "hello world" in output.raw
+
+    async def test_input_text_no_quotes(self, kernel: Kernel) -> None:
+        """input --text handles unquoted values."""
+        output = await kernel.dispatch("input --text hello")
+        assert output.exit_code == 0
+        assert "hello" in output.raw
+
+    async def test_input_file_reads_content(self, kernel: Kernel, tmp_path) -> None:
+        """input --file reads file content into stream."""
+        test_file = tmp_path / "test.txt"
+        test_file.write_text("file content here")
+
+        output = await kernel.dispatch(f'input --file "{test_file}"')
+        assert output.exit_code == 0
+        assert "file content here" in output.raw
+
+    async def test_input_file_not_found(self, kernel: Kernel) -> None:
+        """input --file returns error for missing file."""
+        output = await kernel.dispatch("input --file nonexistent.txt")
+        assert output.exit_code == 1
+        assert "not found" in output.raw
+
+    async def test_input_file_with_type(self, kernel: Kernel, tmp_path) -> None:
+        """input --file --type sets declared MIME type."""
+        test_file = tmp_path / "data.csv"
+        test_file.write_text("a,b,c\n1,2,3")
+
+        output = await kernel.dispatch(f'input --file "{test_file}" --type text/csv')
+        assert output.exit_code == 0
+        assert "a,b,c" in output.raw
+
+    async def test_input_file_multiple_merge_concat(self, kernel: Kernel, tmp_path) -> None:
+        """input --file a.txt --file b.txt --merge concat concatenates files."""
+        (tmp_path / "a.txt").write_text("AAA")
+        (tmp_path / "b.txt").write_text("BBB")
+
+        output = await kernel.dispatch(
+            f'input --file "{tmp_path}\\a.txt" --file "{tmp_path}\\b.txt" --merge concat'
+        )
+        assert output.exit_code == 0
+        assert "AAA" in output.raw
+        assert "BBB" in output.raw
+
+    async def test_input_file_multiple_merge_lines(self, kernel: Kernel, tmp_path) -> None:
+        """input --file --file --merge lines joins with newlines."""
+        (tmp_path / "a.txt").write_text("AAA\n")
+        (tmp_path / "b.txt").write_text("BBB")
+
+        output = await kernel.dispatch(
+            f'input --file "{tmp_path}\\a.txt" --file "{tmp_path}\\b.txt" --merge lines'
+        )
+        assert output.exit_code == 0
+        assert "AAA" in output.raw
+        assert "BBB" in output.raw
+
+    async def test_input_file_binary_guarded(self, kernel: Kernel, tmp_path) -> None:
+        """input --file binary content is guarded by L2 binary filter."""
+        binary_file = tmp_path / "binary.bin"
+        binary_file.write_bytes(b"\x00\x01\x02\x03")
+
+        output = await kernel.dispatch(f'input --file "{binary_file}"')
+        assert output.exit_code == 0
+        assert "binary" in output.raw.lower()
+
+    async def test_input_no_source_error(self, kernel: Kernel) -> None:
+        """input without source returns error."""
+        output = await kernel.dispatch("input list")
+        assert output.exit_code == 0
+        output2 = await kernel.dispatch("input --unknown-flag value")
+        assert output2.exit_code == 1
+
+    async def test_input_text_standalone(self, kernel: Kernel) -> None:
+        """input --text outputs the text content directly."""
+        output = await kernel.dispatch('input --text "direct output"')
+        assert output.exit_code == 0
+        assert "direct output" in output.raw
+
+    def test_strip_quotes(self, kernel: Kernel) -> None:
+        """Helper strips surrounding quotes correctly."""
+        assert kernel._strip_quotes('"hello"') == "hello"
+        assert kernel._strip_quotes("'world'") == "world"
+        assert kernel._strip_quotes("noquotes") == "noquotes"
+        assert kernel._strip_quotes("") == ""
+
+    def test_detect_mime_type(self, kernel: Kernel) -> None:
+        """Helper detects MIME types from file extensions."""
+        assert kernel._detect_mime_type("test.txt") == "text/plain"
+        assert kernel._detect_mime_type("image.png") == "image/png"
+        assert kernel._detect_mime_type("unknown.xyz") == "application/octet-stream"
+
+    def test_extract_multiple_flags(self, kernel: Kernel) -> None:
+        """Helper extracts multiple flag values from raw_args."""
+        env = {"__args__": ["--file", "a.txt", "--file", "b.txt"]}
+        files = kernel._extract_multiple_flags(env, "file")
+        assert files == ["a.txt", "b.txt"]
+
+        env = {"__args__": ["--file", "single.txt"]}
+        files = kernel._extract_multiple_flags(env, "file")
+        assert files == ["single.txt"]
+
+        env = {"__args__": ["--file=path.txt"]}
+        files = kernel._extract_multiple_flags(env, "file")
+        assert files == ["path.txt"]

@@ -158,6 +158,23 @@ Respond to a request:
 chaitya input respond <request_id> Alice
 ```
 
+## L0 Ingest
+
+Create input streams from various sources (text, files, clipboard):
+
+```bash
+chaitya input --text "hello world"           # Direct text input
+chaitya input --file data.csv                # Read file content
+chaitya input --file a.txt --file b.txt      # Multiple files (merge)
+chaitya input --file a.txt --file b.txt --merge concat  # Concatenate files
+chaitya input --file a.txt --file b.txt --merge lines   # Join with newlines
+```
+
+Use with pipelines:
+
+```bash
+chaitya input --file data.csv | shell run --command "grep pattern"
+
 ## First-Party Adapters
 
 ### File
