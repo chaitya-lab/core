@@ -1077,7 +1077,7 @@ class Kernel:
         lines.append("")
         lines.append("info [name]    Show adapter or kernel details")
         lines.append(
-            "session       list|create|status|attach|detach|output|send|set-env|signal|kill"
+            "session       list|create|status|attach|view|detach|output|send|set-env|signal|kill"
         )
         lines.append(
             "watch         --all|--session <name>|--search <query>|--live --session <name>"
@@ -1234,6 +1234,18 @@ class Kernel:
             try:
                 await self._session_mgr.attach(name)
                 return f"Attached to session '{name}'.".encode(), 0
+            except Exception as exc:
+                return str(exc).encode("utf-8"), 1
+
+        if sub == "view":
+            name = ctx.env.get("name") or (positional[0] if positional else "")
+            if not name:
+                return b"Usage: session view <name>", 1
+            try:
+                content = await self._session_mgr.view(name)
+                if isinstance(content, bytes):
+                    return content, 0
+                return content.encode("utf-8"), 0
             except Exception as exc:
                 return str(exc).encode("utf-8"), 1
 

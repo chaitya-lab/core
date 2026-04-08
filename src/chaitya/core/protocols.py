@@ -58,6 +58,14 @@ class SessionBackend(Protocol):
         """Attach to an existing session (interactive)."""
         ...
 
+    async def view(self, name: str) -> str:
+        """Return the current content of a session's pane (non-interactive).
+        
+        Unlike attach, this just captures and returns the content
+        without blocking. Useful for monitoring without taking over.
+        """
+        ...
+
     async def detach(self, name: str) -> None:
         """Detach from a session without killing it."""
         ...

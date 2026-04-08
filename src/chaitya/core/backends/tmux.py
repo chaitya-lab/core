@@ -60,6 +60,19 @@ class TmuxSessionBackend:
         )
         await proc.communicate()
 
+    async def view(self, name: str) -> bytes:
+        """Return the current content of the session's pane.
+        
+        Unlike attach, this just captures and returns the content
+        without blocking. Useful for monitoring without taking over.
+        Captures full scrollback history.
+        """
+        # Capture full pane history with large negative start
+        result = await self._run_tmux_capture(
+            "capture-pane", "-p", "-t", name, "-S", "-9999"
+        )
+        return result.encode("utf-8")
+
     async def kill(self, name: str) -> None:
         await self._ensure_exists(name)
         await self._run_tmux("kill-session", "-t", name)

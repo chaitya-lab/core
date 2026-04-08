@@ -286,6 +286,10 @@ class SessionManager:
         """Attach to an existing session (interactive)."""
         await self._backend.attach(name)
 
+    async def view(self, name: str) -> str:
+        """Return the current content of a session's pane (non-interactive)."""
+        return await self._backend.view(name)
+
     async def detach(self, name: str) -> None:
         """Detach from a session without killing it."""
         await self._backend.detach(name)
