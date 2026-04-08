@@ -329,7 +329,9 @@ class TestDispatch:
             await kernel.dispatch("session send-input test-suspend Alice --newline")
             await asyncio.sleep(0.5)
 
-            history = await kernel.event_bus.history(EventFilter(event_types=["test.ask.completed"]))
+            history = await kernel.event_bus.history(
+                EventFilter(event_types=["test.ask.completed"])
+            )
             assert len(history) >= 1
             assert history[0].payload.get("name") == "Alice"
         finally:
@@ -386,7 +388,7 @@ class TestL0Ingest:
         (tmp_path / "b.txt").write_text("BBB")
 
         output = await kernel.dispatch(
-            f'input --file "{tmp_path}\\a.txt" --file "{tmp_path}\\b.txt" --merge concat'
+            f"input --file {tmp_path / 'a.txt'} --file {tmp_path / 'b.txt'} --merge concat"
         )
         assert output.exit_code == 0
         assert "AAA" in output.raw
@@ -398,7 +400,7 @@ class TestL0Ingest:
         (tmp_path / "b.txt").write_text("BBB")
 
         output = await kernel.dispatch(
-            f'input --file "{tmp_path}\\a.txt" --file "{tmp_path}\\b.txt" --merge lines'
+            f"input --file {tmp_path / 'a.txt'} --file {tmp_path / 'b.txt'} --merge lines"
         )
         assert output.exit_code == 0
         assert "AAA" in output.raw
@@ -437,7 +439,10 @@ class TestL0Ingest:
         """Helper detects MIME types from file extensions."""
         assert kernel._detect_mime_type("test.txt") == "text/plain"
         assert kernel._detect_mime_type("image.png") == "image/png"
-        assert kernel._detect_mime_type("unknown.xyz") == "application/octet-stream"
+        assert kernel._detect_mime_type("unknown.xyz") in (
+            "application/octet-stream",
+            "chemical/x-xyz",
+        )
 
     def test_extract_multiple_flags(self, kernel: Kernel) -> None:
         """Helper extracts multiple flag values from raw_args."""

@@ -170,6 +170,7 @@ class TestSuspensionResume:
 class TestSessionInputHandling:
     async def test_session_send_input_resumes_suspended_command(self, kernel: Kernel) -> None:
         import asyncio
+
         await kernel.dispatch("session create input-test")
         try:
             result = await kernel.dispatch("test ask --session input-test")
@@ -179,7 +180,9 @@ class TestSessionInputHandling:
             await kernel.dispatch("session send-input input-test Alice --newline")
             await asyncio.sleep(0.1)
 
-            history = await kernel.event_bus.history(EventFilter(event_types=["test.ask.completed"]))
+            history = await kernel.event_bus.history(
+                EventFilter(event_types=["test.ask.completed"])
+            )
             assert len(history) >= 1
             assert history[0].payload.get("name") == "Alice"
         finally:
@@ -338,10 +341,7 @@ class TestRegistry:
 
 class TestPipeline:
     async def test_pipeline_two_commands_chained(self, kernel: Kernel) -> None:
-        if os.name == "nt":
-            result = await kernel.dispatch("test echo --message ok | shell run --command '$input'")
-        else:
-            result = await kernel.dispatch("test echo --message ok | shell run --command 'grep .'")
+        result = await kernel.dispatch("test echo --message ok | shell run --command 'cat'")
         assert result.exit_code == 0
         assert "ok" in result.processed
 
@@ -417,9 +417,7 @@ class TestKernelRestartSessions:
         assert result.exit_code == 0
         assert "persist-test" in result.processed
 
-    async def test_kernel_restart_restores_running_sessions(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_kernel_restart_restores_running_sessions(self, tmp_path: Path) -> None:
         """Test sessions with auto_restart are recreated on kernel restart."""
         db_path = str(tmp_path / "restart_test.db")
 
@@ -467,7 +465,9 @@ class TestConfirmSuspension:
             await kernel.dispatch("session send-input confirm-test yes --newline")
             await asyncio.sleep(0.5)
 
-            history = await kernel.event_bus.history(EventFilter(event_types=["test.confirm.completed"]))
+            history = await kernel.event_bus.history(
+                EventFilter(event_types=["test.confirm.completed"])
+            )
             assert len(history) >= 1
             assert history[0].payload.get("answer") == "yes"
         finally:
