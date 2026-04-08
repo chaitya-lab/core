@@ -7,14 +7,12 @@ import os
 
 import pytest
 
-from chaitya.core.kernel import Kernel, KERNEL_COMMANDS, _PendingInputRequest
-from chaitya_sdk.types import InputSpec as SdkInputSpec
+from chaitya.core.kernel import Kernel, KERNEL_COMMANDS
 from chaitya.core.types import (
     AdapterContract,
     AdapterPackage,
     AdapterPermissions,
     AdapterStatus,
-    ChaityaStream,
     CommandOutput,
     CommandSpec,
     Event,
@@ -22,7 +20,6 @@ from chaitya.core.types import (
     KernelBootError,
     KERNEL_STARTED,
     KERNEL_SHUTTING_DOWN,
-    PipelineContext,
 )
 
 
@@ -252,6 +249,8 @@ class TestDispatch:
             await kernel.shutdown()
 
     async def test_session_send_input_and_output_roundtrip(self) -> None:
+        if os.name == "nt":
+            pytest.skip("psmux sessions don't work well without TTY on Windows")
         kernel = Kernel(
             db_path=":memory:",
             session_backend=_session_backend(),
@@ -304,88 +303,35 @@ class TestDispatch:
         finally:
             await kernel.shutdown()
 
-    async def test_input_timeout_expires_pending_request(self) -> None:
-        """Pending input requests are expired after the configured timeout.
+    async def test_session_suspend_and_resume_via_send_input(self) -> None:
+        """Sessions can be suspended and resumed via session send-input.
 
-        We set created_at to the distant past so the timeout loop immediately
-        detects the expired request on its next iteration.
+        This tests the new session-based approach where suspended commands
+        are stored in SessionManager and resumed when input is received.
         """
-        from datetime import timedelta, datetime as dt, UTC
-
         kernel = Kernel(
             db_path=":memory:",
+            session_backend=_session_backend(),
             system_adapters=frozenset(),
-            input_timeout_seconds=300,
         )
         await kernel.boot()
         try:
-            past = (dt.now(UTC) - timedelta(seconds=600)).isoformat()
-            kernel._pending_inputs["test-request-id"] = _PendingInputRequest(
-                request_id="test-request-id",
-                adapter_name="test-adapter",
-                handler=None,
-                contract=None,
-                permissions=AdapterPermissions(),
-                input_stream=ChaityaStream(),
-                ctx=PipelineContext(),
-                spec=SdkInputSpec(name="test-field", prompt="test"),
-                args={},
-                created_at=past,
-            )
-            assert "test-request-id" in kernel._pending_inputs
+            created = await kernel.dispatch("session create test-suspend")
+            assert created.exit_code == 0
 
-            # Manually invoke one iteration of the timeout loop
-            from chaitya.core.types import Event
+            result = await kernel.dispatch("test ask --session test-suspend")
+            assert "[waiting]" in result.processed
 
-            original_emit = kernel._event_bus.emit
+            record = await kernel._store.get_session("test-suspend")
+            assert record is not None
+            assert record.state.value == "waiting"
 
-            emitted_types: list[str] = []
+            await kernel.dispatch("session send-input test-suspend Alice --newline")
+            await asyncio.sleep(0.5)
 
-            async def tracking_emit(event: Event) -> None:
-                emitted_types.append(event.type)
-                await original_emit(event)
-
-            kernel._event_bus.emit = tracking_emit
-            try:
-                # Trigger timeout check by calling the loop body directly
-                from chaitya.core.types import Event as CoreEvent
-                from datetime import datetime as dt
-
-                now = dt.now(UTC)
-                expired: list[str] = []
-                for request_id, pending in list(kernel._pending_inputs.items()):
-                    created_str = pending.created_at
-                    if not created_str:
-                        continue
-                    try:
-                        created = dt.fromisoformat(created_str)
-                    except (ValueError, TypeError):
-                        continue
-                    age_seconds = (now - created).total_seconds()
-                    if age_seconds >= kernel._input_timeout_seconds:
-                        expired.append(request_id)
-                        await kernel._store.delete_pending_input(request_id)
-                        await kernel._event_bus.emit(
-                            CoreEvent(
-                                type="input_timeout",
-                                source_adapter="kernel",
-                                session_id=pending.ctx.session_id,
-                                request_id=request_id,
-                                payload={
-                                    "adapter": pending.adapter_name,
-                                    "field": pending.spec.name if pending.spec else "unknown",
-                                    "age_seconds": int(age_seconds),
-                                },
-                            )
-                        )
-
-                for request_id in expired:
-                    kernel._pending_inputs.pop(request_id, None)
-
-                assert "test-request-id" not in kernel._pending_inputs
-                assert "input_timeout" in emitted_types
-            finally:
-                kernel._event_bus.emit = original_emit
+            history = await kernel.event_bus.history(EventFilter(event_types=["test.ask.completed"]))
+            assert len(history) >= 1
+            assert history[0].payload.get("name") == "Alice"
         finally:
             await kernel.shutdown()
 

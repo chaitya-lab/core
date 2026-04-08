@@ -14,6 +14,7 @@ adapter loader when the kernel boots with default system adapters.
 
 from __future__ import annotations
 
+import asyncio
 import os
 
 import pytest
@@ -151,51 +152,38 @@ class TestWatch:
 class TestSuspensionResume:
     async def test_ask_without_name_suspends(self, kernel: Kernel) -> None:
         result = await kernel.dispatch("test ask")
-        assert "[waiting:" in result.processed
-        assert len(kernel._pending_inputs) == 1
+        assert "[waiting]" in result.processed
+        assert "What is your name?" in result.processed
+        assert "session send-input" in result.processed
 
-        pending = next(iter(kernel._pending_inputs.values()))
-        assert pending.spec.name == "name"
-        assert "name" in pending.spec.prompt.lower()
+    async def test_input_list_shows_no_sessions_without_context(self, kernel: Kernel) -> None:
+        result = await kernel.dispatch("test ask")
+        assert "[waiting]" in result.processed
+        list_result = await kernel.dispatch("input list")
+        assert "no sessions waiting" in list_result.processed.lower()
 
-    async def test_ask_resumed_with_name_prints_greeting(self, kernel: Kernel) -> None:
-        first = await kernel.dispatch("test ask")
-        assert "[waiting:" in first.processed
-
-        request_id = next(iter(kernel._pending_inputs.keys()))
-        result = await kernel.dispatch(f"input respond {request_id} Alice")
-        assert result.exit_code == 0
-
-        assert len(kernel._pending_inputs) == 0
-
-        history = await kernel.event_bus.history(EventFilter(event_types=["test.ask.completed"]))
-        assert len(history) >= 1
-        assert history[0].payload.get("name") == "Alice"
-
-    async def test_input_list_shows_pending(self, kernel: Kernel) -> None:
-        await kernel.dispatch("test ask")
-        result = await kernel.dispatch("input list")
-        assert result.exit_code == 0
-        assert "name" in result.processed.lower() or "adapter" in result.processed.lower()
-
-    async def test_input_respond_unknown_id_returns_error(self, kernel: Kernel) -> None:
+    async def test_input_respond_shows_guidance(self, kernel: Kernel) -> None:
         result = await kernel.dispatch("input respond does-not-exist myname")
-        assert result.exit_code != 0
+        assert "session send-input" in result.processed.lower()
 
-    async def test_multiple_ask_sessions_suspended(self, kernel: Kernel) -> None:
-        await kernel.dispatch("test ask")
-        await kernel.dispatch("test ask")
 
-        assert len(kernel._pending_inputs) == 2
+class TestSessionInputHandling:
+    async def test_session_send_input_resumes_suspended_command(self, kernel: Kernel) -> None:
+        import asyncio
+        await kernel.dispatch("session create input-test")
+        try:
+            result = await kernel.dispatch("test ask --session input-test")
+            assert "[waiting]" in result.processed
+            assert "session send-input input-test" in result.processed
 
-        ids = list(kernel._pending_inputs.keys())
-        r1 = await kernel.dispatch(f"input respond {ids[0]} Alice")
-        assert r1.exit_code == 0
-        assert len(kernel._pending_inputs) == 1
+            await kernel.dispatch("session send-input input-test Alice --newline")
+            await asyncio.sleep(0.1)
 
-        r2 = await kernel.dispatch(f"input respond {ids[1]} Bob")
-        assert r2.exit_code == 0
-        assert len(kernel._pending_inputs) == 0
+            history = await kernel.event_bus.history(EventFilter(event_types=["test.ask.completed"]))
+            assert len(history) >= 1
+            assert history[0].payload.get("name") == "Alice"
+        finally:
+            await kernel.dispatch("session kill input-test")
 
 
 # ---------------------------------------------------------------------------
@@ -231,6 +219,8 @@ class TestSessionLifecycle:
         assert "session output" in result.processed
 
     async def test_session_send_input_and_output(self, kernel: Kernel) -> None:
+        if os.name == "nt":
+            pytest.skip("psmux sessions don't work well without TTY on Windows")
         await kernel.dispatch("session create io-test")
 
         if os.name == "nt":
@@ -254,16 +244,15 @@ class TestSuspensionTypes:
     async def test_ask_text_type_suspension(self, kernel: Kernel) -> None:
         """Test TEXT type suspension requires name."""
         result = await kernel.dispatch("test ask")
-        assert "[waiting:" in result.processed
-        pending = next(iter(kernel._pending_inputs.values()))
-        assert pending.spec.name == "name"
+        assert "[waiting]" in result.processed
+        assert "session send-input" in result.processed
 
     async def test_input_list_shows_suspended_request(self, kernel: Kernel) -> None:
-        """Test input list shows suspended requests."""
+        """Test input list shows suspended requests via session state."""
         await kernel.dispatch("test ask")
         result = await kernel.dispatch("input list")
         assert result.exit_code == 0
-        assert "REQUEST_ID" in result.processed or "name" in result.processed
+        assert "default" in result.processed or "waiting" in result.processed
 
 
 class TestResourceLimits:
@@ -465,9 +454,21 @@ class TestConfirmSuspension:
         assert "waiting" in raw_str.lower() or "[waiting:" in raw_str
 
     async def test_confirm_suspension_requires_response(self, kernel: Kernel) -> None:
-        """Test CONFIRM suspension waits for input_response."""
-        await kernel.dispatch("test confirm")
+        """Test CONFIRM suspension via session send-input."""
+        await kernel.dispatch("session create confirm-test")
+        try:
+            result = await kernel.dispatch("test confirm --session confirm-test")
+            assert "[waiting]" in result.processed
 
-        request_id = next(iter(kernel._pending_inputs.keys()))
-        result = await kernel.dispatch(f"input respond {request_id} yes")
-        assert result.exit_code == 0
+            record = await kernel._store.get_session("confirm-test")
+            assert record is not None
+            assert record.state.value == "waiting"
+
+            await kernel.dispatch("session send-input confirm-test yes --newline")
+            await asyncio.sleep(0.5)
+
+            history = await kernel.event_bus.history(EventFilter(event_types=["test.confirm.completed"]))
+            assert len(history) >= 1
+            assert history[0].payload.get("answer") == "yes"
+        finally:
+            await kernel.dispatch("session kill confirm-test")

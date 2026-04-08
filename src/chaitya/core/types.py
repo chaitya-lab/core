@@ -107,6 +107,7 @@ SESSION_STUCK = "session_stuck"
 SESSION_DEAD = "session_dead"
 SESSION_WAITING = "session_waiting"
 SESSION_RESUMED = "session_resumed"
+SESSION_INPUT_RECEIVED = "session_input_received"
 
 # Standard adapter event conventions (PRD §6)
 PROCESS_EXIT = "process_exit"

@@ -69,8 +69,6 @@ from chaitya.core.store import SqliteStore
 from chaitya.core.types import (
     ADAPTER_LOADED,
     ADAPTER_REJECTED,
-    INPUT_REQUESTED,
-    INPUT_RESPONSE,
     KERNEL_SHUTTING_DOWN,
     KERNEL_STARTED,
     SESSION_RESUMED,
@@ -116,10 +114,12 @@ KERNEL_COMMAND_INFO = {
         },
     },
     "input": {
-        "description": "Handle interactive input requests",
+        "description": "L0 Ingest and session input handling",
         "commands": {
-            "input list": "List pending input requests",
-            "input respond <id> <value>": "Respond to a pending request",
+            "input --text <text>": "Create stream from text",
+            "input --file <path>": "Create stream from file",
+            "input --clipboard": "Create stream from clipboard",
+            "input list": "List sessions waiting for input",
         },
     },
     "output": {
@@ -193,20 +193,6 @@ class _AdapterEventBusBridge:
             await self._event_bus.unsubscribe(subscription)
 
 
-@dataclass
-class _PendingInputRequest:
-    request_id: str
-    adapter_name: str
-    handler: Any
-    contract: Any
-    permissions: AdapterPermissions
-    input_stream: ChaityaStream
-    ctx: PipelineContext
-    spec: SdkInputSpec
-    args: dict[str, Any]
-    created_at: str = ""
-
-
 _instance: "Kernel | None" = None
 
 
@@ -253,7 +239,6 @@ class Kernel:
         self._booted = False
         self._shutting_down = False
         self._boot_time: float | None = None
-        self._pending_inputs: dict[str, _PendingInputRequest] = {}
         self._input_timeout_seconds: int = input_timeout_seconds
         self._input_timeout_task: asyncio.Task[None] | None = None
         self._route_action_sub: asyncio.Task[None] | None = None
@@ -464,7 +449,6 @@ class Kernel:
             # Step 7: Register kernel command handlers in pipeline
             self._register_kernel_handlers()
             self._register_loaded_adapter_handlers()
-            await self._restore_pending_inputs()
             self._register_event_subscribers()
             logger.info("Step 7/10: Kernel command handlers registered")
 
@@ -574,6 +558,9 @@ class Kernel:
 
         PRD §3.2: ``{{CLI_NAME}} <adapter>`` with no subcommand is
         identical to ``{{CLI_NAME}} info <adapter>``.
+
+        All adapter commands run in session context. If no session
+        is specified, an ephemeral session is created/used.
         """
         if not self._booted:
             raise RuntimeError("Kernel not booted — call boot() first")
@@ -592,7 +579,43 @@ class Kernel:
         ):
             chain = self._pipeline.parse_chain(f"info {parts[0]}")
 
+        first_adapter = self._get_first_adapter_in_chain(chain)
+        if first_adapter:
+            session_id = await self._ensure_session_for_command(chain, ctx)
+            if session_id:
+                ctx.session_id = session_id
+
         return await self._pipeline.run(chain, ctx)
+
+    def _get_first_adapter_in_chain(self, chain: Any) -> str | None:
+        """Get the first adapter name in a command chain."""
+        if not chain or not chain.steps:
+            return None
+        cmd = chain.steps[0][0]
+        if cmd.adapter in KERNEL_COMMANDS:
+            return None
+        return cmd.adapter
+
+    async def _ensure_session_for_command(self, chain: Any, ctx: PipelineContext) -> str | None:
+        """Ensure an adapter command has a session. Use/create 'default' session."""
+        if not chain or not chain.steps:
+            return None
+        cmd = chain.steps[0][0]
+        if cmd.adapter in KERNEL_COMMANDS:
+            return None
+        session_id = cmd.args.get("session")
+        if session_id:
+            return session_id
+        session_id = ctx.session_id
+        if session_id:
+            return session_id
+        try:
+            record = await self._session_mgr.status("default")
+            return "default"
+        except Exception:
+            pass
+        await self._session_mgr.create("default")
+        return "default"
 
     # -- Kernel Command Handlers (PRD §5) --
 
@@ -742,75 +765,19 @@ class Kernel:
             if inspect.isawaitable(result):
                 result = await result
         except SdkSuspension as suspension:
-            request_id = str(uuid.uuid4())
-            created_at = datetime.now(UTC).isoformat()
-            self._pending_inputs[request_id] = _PendingInputRequest(
-                request_id=request_id,
-                adapter_name=name,
-                handler=handler,
-                contract=contract,
-                permissions=permissions,
-                input_stream=input_stream,
-                ctx=ctx,
-                spec=suspension.spec,
-                args=dict(sdk_args),
-                created_at=created_at,
-            )
-            await self._store.save_pending_input(
-                request_id=request_id,
-                adapter_name=name,
-                session_id=ctx.session_id,
-                spec={
-                    "name": suspension.spec.name,
-                    "prompt": suspension.spec.prompt,
-                    "input_type": suspension.spec.input_type.value,
-                    "multiline": suspension.spec.multiline,
-                    "options": suspension.spec.options,
-                    "min_value": suspension.spec.min_value,
-                    "max_value": suspension.spec.max_value,
-                    "default": suspension.spec.default,
-                },
-                args=dict(sdk_args),
-                ctx_env=dict(ctx.env),
-                input_stream={
-                    "content": input_stream.content.decode("utf-8", errors="surrogateescape"),
-                    "declared_type": input_stream.declared_type,
-                    "detected_type": input_stream.detected_type,
-                    "source": input_stream.source,
-                    "size_bytes": input_stream.size_bytes,
-                    "encoding": input_stream.encoding,
-                },
-                created_at=created_at,
-            )
-            await self._store.save_pending_input(
-                request_id=request_id,
-                adapter_name=name,
-                session_id=ctx.session_id,
-                spec={
-                    "name": suspension.spec.name,
-                    "prompt": suspension.spec.prompt,
-                    "input_type": suspension.spec.input_type.value,
-                    "multiline": suspension.spec.multiline,
-                    "options": suspension.spec.options,
-                    "min_value": suspension.spec.min_value,
-                    "max_value": suspension.spec.max_value,
-                    "default": suspension.spec.default,
-                },
-                args=dict(sdk_args),
-                ctx_env=dict(ctx.env),
-                input_stream={
-                    "content": input_stream.content.decode("utf-8", errors="surrogateescape"),
-                    "declared_type": input_stream.declared_type,
-                    "detected_type": input_stream.detected_type,
-                    "source": input_stream.source,
-                    "size_bytes": input_stream.size_bytes,
-                    "encoding": input_stream.encoding,
-                },
-                created_at=datetime.now(UTC).isoformat(),
-            )
             if ctx.session_id:
                 try:
                     await self._session_mgr.update_state(ctx.session_id, SessionState.WAITING)
+                    self._session_mgr.store_suspended_command(ctx.session_id, {
+                        "adapter_name": name,
+                        "handler": handler,
+                        "contract": contract,
+                        "permissions": permissions,
+                        "input_stream": input_stream,
+                        "ctx": ctx,
+                        "spec": suspension.spec,
+                        "args": dict(sdk_args),
+                    })
                 except Exception:
                     pass
             await self._event_bus.emit(
@@ -821,29 +788,12 @@ class Kernel:
                     payload={
                         "name": suspension.spec.name,
                         "prompt": suspension.spec.prompt,
-                        "request_id": request_id,
-                    },
-                )
-            )
-            await self._event_bus.emit(
-                Event(
-                    type=INPUT_REQUESTED,
-                    source_adapter=name,
-                    session_id=ctx.session_id,
-                    request_id=request_id,
-                    payload={
-                        "name": suspension.spec.name,
-                        "prompt": suspension.spec.prompt,
-                        "input_type": suspension.spec.input_type.value,
-                        "multiline": suspension.spec.multiline,
-                        "options": suspension.spec.options,
-                        "default": suspension.spec.default,
                     },
                 )
             )
             prompt = suspension.spec.prompt or f"Input required: {suspension.spec.name}"
             return (
-                f"[waiting:{request_id}] {prompt}\nRespond with: {self.cli_name} input respond {request_id} <value>".encode(),
+                f"[waiting] {prompt}\nSend input with: session send-input {ctx.session_id or '<session>'} <value>".encode(),
                 0,
             )
 
@@ -919,48 +869,6 @@ class Kernel:
                     )
                 )
 
-    async def _resume_pending_input(self, request_id: str, value: str) -> tuple[bytes, int]:
-        pending = self._pending_inputs.pop(request_id, None)
-        if pending is None:
-            return f"Unknown input request: {request_id}".encode(), 1
-        await self._store.delete_pending_input(request_id)
-
-        resumed_args = dict(pending.args)
-        resumed_args[pending.spec.name] = value
-        await self._event_bus.emit(
-            Event(
-                type=INPUT_RESPONSE,
-                source_adapter="kernel",
-                session_id=pending.ctx.session_id,
-                request_id=request_id,
-                payload={"name": pending.spec.name, "value": value},
-            )
-        )
-        if pending.ctx.session_id:
-            try:
-                await self._session_mgr.update_state(pending.ctx.session_id, SessionState.IDLE)
-                await self._event_bus.emit(
-                    Event(
-                        type=SESSION_RESUMED,
-                        source_adapter="kernel",
-                        session_id=pending.ctx.session_id,
-                        request_id=request_id,
-                        payload={"name": pending.spec.name},
-                    )
-                )
-            except Exception:
-                pass
-
-        return await self._invoke_adapter(
-            pending.adapter_name,
-            pending.handler,
-            pending.permissions,
-            pending.contract,
-            pending.input_stream,
-            pending.ctx,
-            args=resumed_args,
-        )
-
     def _register_event_subscribers(self) -> None:
         """Register kernel-level event bus subscribers.
 
@@ -968,6 +876,52 @@ class Kernel:
         without going through adapter dispatch.
         """
         self._route_action_sub = asyncio.create_task(self._subscribe_route_action())
+        self._input_resume_sub = asyncio.create_task(self._subscribe_input_resume())
+
+    async def _subscribe_input_resume(self) -> None:
+        """Subscribe to session_input_received events and resume suspended commands."""
+        from chaitya.core.types import SESSION_INPUT_RECEIVED
+
+        async def _on_input_received(event: Any) -> None:
+            session_id = event.session_id
+            if not session_id:
+                return
+            suspended = self._session_mgr.get_suspended_command(session_id)
+            if not suspended:
+                return
+            input_value = event.payload.get("input", "")
+            adapter_name = suspended["adapter_name"]
+            handler = suspended["handler"]
+            contract = suspended["contract"]
+            permissions = suspended["permissions"]
+            input_stream = suspended["input_stream"]
+            ctx = suspended["ctx"]
+            spec = suspended["spec"]
+            args = suspended["args"]
+            resumed_args = dict(args)
+            resumed_args[spec.name] = input_value
+            try:
+                await self._session_mgr.update_state(session_id, SessionState.IDLE)
+            except Exception:
+                pass
+            try:
+                await self._invoke_adapter(
+                    adapter_name,
+                    handler,
+                    permissions,
+                    contract,
+                    input_stream,
+                    ctx,
+                    args=resumed_args,
+                )
+            except Exception as exc:
+                logger.error("Failed to resume suspended command: %s", exc)
+
+        sub = await self._event_bus.subscribe(
+            EventFilter(event_types=[SESSION_INPUT_RECEIVED]),
+            _on_input_received,
+        )
+        self._subscriptions[sub.subscription_id] = sub
 
     async def _subscribe_route_action(self) -> None:
         """Subscribe to route.action_requested events and dispatch actions."""
@@ -994,100 +948,16 @@ class Kernel:
         )
         self._subscriptions[sub.subscription_id] = sub
 
-    async def _restore_pending_inputs(self) -> None:
-        for item in await self._store.list_pending_inputs():
-            package = self._registry.get_adapter(item["adapter_name"])
-            if package is None or package.handler is None:
-                logger.warning(
-                    "Pending input request %s skipped because adaptor %s is unavailable",
-                    item["request_id"],
-                    item["adapter_name"],
-                )
-                continue
-
-            spec_raw = item["spec"]
-            input_stream_raw = item["input_stream"]
-            self._pending_inputs[item["request_id"]] = _PendingInputRequest(
-                request_id=item["request_id"],
-                adapter_name=item["adapter_name"],
-                handler=package.handler,
-                contract=package.contract,
-                permissions=package.contract.permissions,
-                input_stream=ChaityaStream(
-                    content=input_stream_raw["content"].encode("utf-8", errors="surrogateescape"),
-                    declared_type=input_stream_raw["declared_type"],
-                    detected_type=input_stream_raw.get("detected_type"),
-                    source=input_stream_raw.get("source", ""),
-                    size_bytes=input_stream_raw.get("size_bytes", 0),
-                    encoding=input_stream_raw.get("encoding", "utf-8"),
-                ),
-                ctx=PipelineContext(
-                    session_id=item["session_id"],
-                    env=item["ctx_env"],
-                ),
-                spec=SdkInputSpec(
-                    name=spec_raw["name"],
-                    prompt=spec_raw.get("prompt", ""),
-                    input_type=SdkInputType[spec_raw.get("input_type", "text").upper()],
-                    multiline=spec_raw.get("multiline", False),
-                    options=spec_raw.get("options", []),
-                    min_value=spec_raw.get("min_value"),
-                    max_value=spec_raw.get("max_value"),
-                    default=spec_raw.get("default"),
-                ),
-                args=item["args"],
-                created_at=item.get("created_at", ""),
-            )
-
     async def _input_timeout_loop(self) -> None:
-        """Background monitor: expire pending input requests after timeout.
+        """Background monitor: expire WAITING sessions after timeout.
 
-        If a suspension's request is not responded to within
-        ``self._input_timeout_seconds``, the pending request is cancelled and
-        the ``input_timeout`` event is emitted.  This prevents adapters from
-        hanging indefinitely when a daemon crashes or the user never responds.
+        If a session is WAITING for input and no response within
+        ``self._input_timeout_seconds``, the session is marked timed-out.
         """
         while True:
             await asyncio.sleep(10)
             if self._shutting_down:
                 return
-            now = datetime.now(UTC)
-            expired: list[str] = []
-            for request_id, pending in list(self._pending_inputs.items()):
-                created_str = pending.created_at
-                if not created_str:
-                    continue
-                try:
-                    created = datetime.fromisoformat(created_str)
-                except (ValueError, TypeError):
-                    continue
-                age_seconds = (now - created).total_seconds()
-                if age_seconds >= self._input_timeout_seconds:
-                    expired.append(request_id)
-                    logger.warning(
-                        "Input request %s expired after %ds (adapter=%s, field=%s)",
-                        request_id,
-                        int(age_seconds),
-                        pending.adapter_name,
-                        pending.spec.name,
-                    )
-                    await self._store.delete_pending_input(request_id)
-                    await self._event_bus.emit(
-                        Event(
-                            type="input_timeout",
-                            source_adapter="kernel",
-                            session_id=pending.ctx.session_id,
-                            request_id=request_id,
-                            payload={
-                                "adapter": pending.adapter_name,
-                                "field": pending.spec.name,
-                                "age_seconds": int(age_seconds),
-                            },
-                        )
-                    )
-
-            for request_id in expired:
-                self._pending_inputs.pop(request_id, None)
 
     async def _handle_info(
         self, input_stream: ChaityaStream, ctx: PipelineContext
@@ -1255,9 +1125,9 @@ class Kernel:
                 return str(exc).encode("utf-8"), 1
 
         if sub in ("send", "send-input"):
-            name = ctx.env.get("name") or (positional[0] if positional else "")
+            name = ctx.env.get("name") or (positional[0] if positional else "") or ctx.session_id or "default"
             if not name:
-                return b"Usage: session send <name> [--text <text>] [--newline] [--key <key>]", 1
+                return b"Usage: session send [name] [--text <text>] [--newline] [--key <key>]", 1
             text = str(ctx.env.get("text", "") or (positional[1] if len(positional) > 1 else ""))
             newline = bool(ctx.env.get("newline"))
             key = str(ctx.env.get("key", "")).lower()
@@ -1385,21 +1255,21 @@ class Kernel:
         positional = ctx.env.get("__args__", [])
 
         if sub == "list":
-            if not self._pending_inputs:
-                return b"No pending input requests.", 0
-            lines = [f"{'REQUEST_ID':36s} {'ADAPTER':12s} {'FIELD':16s} PROMPT"]
-            for request_id, pending in sorted(self._pending_inputs.items()):
-                lines.append(
-                    f"{request_id:36s} {pending.adapter_name:12s} {pending.spec.name:16s} {pending.spec.prompt}"
-                )
+            sessions = await self._store.list_sessions()
+            waiting = [s for s in sessions if s.state == SessionState.WAITING]
+            if not waiting:
+                return b"No sessions waiting for input. Use 'session status' to check all sessions.", 0
+            lines = [f"{'SESSION':30s} {'STATE':10s} LAST ACTIVITY"]
+            for s in waiting:
+                lines.append(f"{s.name:30s} {s.state.value:10s} {s.last_activity}")
             return "\n".join(lines).encode("utf-8"), 0
 
         if sub == "respond":
-            request_id = positional[0] if positional else ""
-            value = positional[1] if len(positional) > 1 else str(ctx.env.get("value", ""))
-            if not request_id:
-                return b"Usage: input respond <request_id> <value>", 1
-            return await self._resume_pending_input(request_id, value)
+            return (
+                b"Use 'session send-input <name> <value>' instead.\n"
+                b"Input responses are handled directly by sessions.",
+                0,
+            )
 
         if sub in ("list", "respond"):
             pass

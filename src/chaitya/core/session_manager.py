@@ -22,6 +22,7 @@ from typing import Any
 from chaitya.core.protocols import EventBusProtocol, SessionBackend, StoreProtocol
 from chaitya.core.types import (
     SESSION_CREATED,
+    SESSION_INPUT_RECEIVED,
     SESSION_KILLED,
     SESSION_STATE_CHANGED,
     SESSION_STUCK,
@@ -65,6 +66,7 @@ class SessionManager:
         self._template_startup_cmd: dict[str, str | None] = {}
         self._template_git_worktree: dict[str, bool] = {}
         self._template_health_check: dict[str, int] = {}
+        self._suspended_commands: dict[str, dict[str, Any]] = {}
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -295,11 +297,36 @@ class SessionManager:
     async def send_input(self, name: str, data: bytes) -> None:
         """Send input to a session's stdin.
 
-        Checks session state: if busy, behaviour depends on adapter's
-        on_busy_input policy (handled at dispatch level, not here).
+        Also handles resuming suspended commands if session has one.
         """
         await self._backend.send_input(name, data)
         self._touch(name)
+        if self.has_suspended_command(name):
+            text = data.decode("utf-8", errors="replace").replace("\r\n", "\n").replace("\n", "")
+            await self._bus.emit(
+                Event(
+                    type=SESSION_INPUT_RECEIVED,
+                    source_adapter="kernel",
+                    session_id=name,
+                    payload={"input": text, "raw": data.decode("utf-8", errors="replace")},
+                )
+            )
+
+    def store_suspended_command(
+        self,
+        name: str,
+        context: dict[str, Any],
+    ) -> None:
+        """Store suspended command context for a session."""
+        self._suspended_commands[name] = context
+
+    def get_suspended_command(self, name: str) -> dict[str, Any] | None:
+        """Get and clear suspended command context for a session."""
+        return self._suspended_commands.pop(name, None)
+
+    def has_suspended_command(self, name: str) -> bool:
+        """Check if session has a suspended command."""
+        return name in self._suspended_commands
 
     async def set_env(self, name: str, key: str, value: str) -> None:
         """Set an environment variable in a session."""
