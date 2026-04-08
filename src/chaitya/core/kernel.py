@@ -91,21 +91,41 @@ logger = logging.getLogger(__name__)
 KERNEL_COMMANDS = frozenset({"info", "session", "input", "output", "watch", "registry"})
 
 # Kernel debug log configuration (PRD §14)
+# Default location: ~/.chaitya/logs/kernel.log
+# Can be overridden via core.yaml: kernel.debug_log
 _KERNEL_LOG_DIR = Path.home() / ".chaitya" / "logs"
-_KERNEL_LOG_FILE = _KERNEL_LOG_DIR / "kernel.log"
+_kernel_log_path: Path | None = None
 
 
-# Configure kernel logger to write to both file and stderr
-def _configure_kernel_logging() -> None:
-    """Configure kernel logger for file-based debug logging."""
-    _KERNEL_LOG_DIR.mkdir(parents=True, exist_ok=True)
-    handler = logging.FileHandler(_KERNEL_LOG_FILE)
+def _configure_kernel_logging(log_file: str = "", log_level: str = "info") -> None:
+    """Configure kernel logger for file-based debug logging.
+
+    Args:
+        log_file: Custom log file path (empty = default ~/.chaitya/logs/kernel.log)
+        log_level: Logging level (debug, info, warning, error)
+    """
+    global _kernel_log_path
+
+    if log_file:
+        _kernel_log_path = Path(log_file).expanduser()
+        _kernel_log_path.parent.mkdir(parents=True, exist_ok=True)
+    else:
+        _kernel_log_path = _KERNEL_LOG_DIR / "kernel.log"
+        _KERNEL_LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+    handler = logging.FileHandler(_kernel_log_path)
+    level_map = {
+        "debug": logging.DEBUG,
+        "info": logging.INFO,
+        "warning": logging.WARNING,
+        "error": logging.ERROR,
+    }
     handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
     logger.addHandler(handler)
-    logger.setLevel(logging.INFO)
+    logger.setLevel(level_map.get(log_level.lower(), logging.INFO))
 
 
-# Call once at module load
+# Call once at module load with defaults
 _configure_kernel_logging()
 
 KERNEL_COMMAND_INFO = {
@@ -421,6 +441,12 @@ class Kernel:
             raise KernelBootError("Kernel is already booted")
 
         _instance = self
+
+        # Reconfigure logging with config values if provided
+        debug_log = self._config.kernel.debug_log
+        log_level = self._config.kernel.log_level
+        if debug_log or log_level != "info":
+            _configure_kernel_logging(debug_log, log_level)
 
         logger.info("Kernel boot sequence starting...")
         boot_start = time.monotonic()
