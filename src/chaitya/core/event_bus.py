@@ -211,7 +211,7 @@ class SqliteEventBus:
                     await self._flush_to_db_unlocked()
 
         # Deliver to matching subscribers immediately.
-        # Async handlers are awaited inline (they should be fast).
+        # Async handlers are awaited inline with timeout to prevent blocking.
         for entry in list(self._subscriptions.values()):
             if not entry.subscription.active:
                 continue
@@ -219,7 +219,13 @@ class SqliteEventBus:
                 try:
                     result = entry.handler(event)
                     if asyncio.iscoroutine(result):
-                        await result
+                        await asyncio.wait_for(result, timeout=1.0)
+                except asyncio.TimeoutError:
+                    logger.warning(
+                        "Subscriber %s handler timed out after 1s, skipping event %s",
+                        entry.subscription.subscription_id,
+                        event.event_id,
+                    )
                 except Exception:
                     logger.exception(
                         "Subscriber %s handler error",

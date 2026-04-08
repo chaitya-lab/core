@@ -63,6 +63,7 @@ from chaitya.core.backends.tmux import TmuxSessionBackend
 from chaitya.core.config import CoreConfig, EventBusConfig, KernelConfig, SessionConfig
 from chaitya.core.event_bus import SqliteEventBus
 from chaitya.core.pipeline import AdapterHandler, PipelineOrchestrator
+from chaitya.core.protocols import EventBusProtocol, StoreProtocol
 from chaitya.core.registry import AdapterRegistry
 from chaitya.core.session_manager import SessionManager
 from chaitya.core.store import SqliteStore
@@ -88,6 +89,24 @@ logger = logging.getLogger(__name__)
 
 # The six kernel-dispatched commands (PRD §5)
 KERNEL_COMMANDS = frozenset({"info", "session", "input", "output", "watch", "registry"})
+
+# Kernel debug log configuration (PRD §14)
+_KERNEL_LOG_DIR = Path.home() / ".chaitya" / "logs"
+_KERNEL_LOG_FILE = _KERNEL_LOG_DIR / "kernel.log"
+
+
+# Configure kernel logger to write to both file and stderr
+def _configure_kernel_logging() -> None:
+    """Configure kernel logger for file-based debug logging."""
+    _KERNEL_LOG_DIR.mkdir(parents=True, exist_ok=True)
+    handler = logging.FileHandler(_KERNEL_LOG_FILE)
+    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
+
+
+# Call once at module load
+_configure_kernel_logging()
 
 KERNEL_COMMAND_INFO = {
     "info": {
@@ -222,13 +241,15 @@ class Kernel:
         max_log_size_bytes: int = 1_073_741_824,
         templates_dir: str | None = None,
         input_timeout_seconds: int = 300,
-        event_bus: SqliteEventBus | None = None,
+        event_bus: EventBusProtocol | None = None,
     ) -> None:
         # Build a default config if none provided (for programmatic use)
         if config is None:
             config = CoreConfig(
                 kernel=KernelConfig(cli_name=cli_name),
-                session=SessionConfig(backend=session_backend, stuck_threshold_seconds=stuck_threshold_seconds),
+                session=SessionConfig(
+                    backend=session_backend, stuck_threshold_seconds=stuck_threshold_seconds
+                ),
                 adapter_search_paths=adapter_search_paths or [],
                 enabled_adapters=enabled_adapters or [],
                 disabled_adapters=disabled_adapters or [],
@@ -246,7 +267,7 @@ class Kernel:
 
         # --- Subsystem composition ---
         # Use provided event bus, or build one from config (default: SqliteEventBus)
-        self._event_bus: SqliteEventBus = event_bus or SqliteEventBus(
+        self._event_bus: EventBusProtocol = event_bus or SqliteEventBus(
             db_path=db_path,
             max_events_per_second=max_events_per_second,
         )
@@ -254,7 +275,7 @@ class Kernel:
             db_path=db_path,
             max_events_per_second=max_events_per_second,
             max_log_size_bytes=max_log_size_bytes,
-            event_bus=self._event_bus,
+            event_bus=self._event_bus,  # type: ignore[arg-type]
         )
         self._adapter_bus = _AdapterEventBusBridge(self._event_bus)
         self._backend = self._build_session_backend(session_backend)
@@ -768,16 +789,19 @@ class Kernel:
             if ctx.session_id:
                 try:
                     await self._session_mgr.update_state(ctx.session_id, SessionState.WAITING)
-                    self._session_mgr.store_suspended_command(ctx.session_id, {
-                        "adapter_name": name,
-                        "handler": handler,
-                        "contract": contract,
-                        "permissions": permissions,
-                        "input_stream": input_stream,
-                        "ctx": ctx,
-                        "spec": suspension.spec,
-                        "args": dict(sdk_args),
-                    })
+                    self._session_mgr.store_suspended_command(
+                        ctx.session_id,
+                        {
+                            "adapter_name": name,
+                            "handler": handler,
+                            "contract": contract,
+                            "permissions": permissions,
+                            "input_stream": input_stream,
+                            "ctx": ctx,
+                            "spec": suspension.spec,
+                            "args": dict(sdk_args),
+                        },
+                    )
                 except Exception:
                     pass
             await self._event_bus.emit(
@@ -1026,8 +1050,12 @@ class Kernel:
         lines.append(f"Chaitya Core v{__version__}  (uptime: {round(self.uptime_seconds, 1)}s)")
         lines.append("")
         lines.append("info [name]    Show adapter or kernel details")
-        lines.append("session       list|create|status|attach|detach|output|send|set-env|signal|kill")
-        lines.append("watch         --all|--session <name>|--search <query>|--live --session <name>")
+        lines.append(
+            "session       list|create|status|attach|detach|output|send|set-env|signal|kill"
+        )
+        lines.append(
+            "watch         --all|--session <name>|--search <query>|--live --session <name>"
+        )
         lines.append("input         list|respond <id> <value>")
         lines.append("output        --filter <pattern>|--format json|text")
         lines.append("registry      list|disable|enable|validate <name>")
@@ -1125,7 +1153,12 @@ class Kernel:
                 return str(exc).encode("utf-8"), 1
 
         if sub in ("send", "send-input"):
-            name = ctx.env.get("name") or (positional[0] if positional else "") or ctx.session_id or "default"
+            name = (
+                ctx.env.get("name")
+                or (positional[0] if positional else "")
+                or ctx.session_id
+                or "default"
+            )
             if not name:
                 return b"Usage: session send [name] [--text <text>] [--newline] [--key <key>]", 1
             text = str(ctx.env.get("text", "") or (positional[1] if len(positional) > 1 else ""))
@@ -1258,7 +1291,10 @@ class Kernel:
             sessions = await self._store.list_sessions()
             waiting = [s for s in sessions if s.state == SessionState.WAITING]
             if not waiting:
-                return b"No sessions waiting for input. Use 'session status' to check all sessions.", 0
+                return (
+                    b"No sessions waiting for input. Use 'session status' to check all sessions.",
+                    0,
+                )
             lines = [f"{'SESSION':30s} {'STATE':10s} LAST ACTIVITY"]
             for s in waiting:
                 lines.append(f"{s.name:30s} {s.state.value:10s} {s.last_activity}")
@@ -1325,9 +1361,10 @@ class Kernel:
                 content = b"\n".join(merged.splitlines(keepends=True))
             elif merge == "json":
                 import json
-                content = json.dumps({
-                    "parts": [str(len(files)), merged.decode("utf-8", errors="replace")]
-                }).encode()
+
+                content = json.dumps(
+                    {"parts": [str(len(files)), merged.decode("utf-8", errors="replace")]}
+                ).encode()
             else:
                 content = merged
 
@@ -1388,15 +1425,21 @@ class Kernel:
 
         if system == "posix":
             try:
-                result = subprocess.run(
-                    ["pbpaste"], capture_output=True, timeout=5
-                )
+                result = subprocess.run(["pbpaste"], capture_output=True, timeout=5)
                 if result.returncode == 0:
                     return result.stdout
             except (FileNotFoundError, subprocess.TimeoutExpired):
                 pass
 
-            for cmd in ["xclip", "-selection", "clipboard", "-o", "xsel", "--clipboard", "--output"]:
+            for cmd in [
+                "xclip",
+                "-selection",
+                "clipboard",
+                "-o",
+                "xsel",
+                "--clipboard",
+                "--output",
+            ]:
                 try:
                     result = subprocess.run(cmd.split(), capture_output=True, timeout=5)
                     if result.returncode == 0:
@@ -1407,11 +1450,11 @@ class Kernel:
         elif system == "nt":
             try:
                 import platform
+
                 ps_version = platform.version()
                 if int(platform.version().split(".")[0]) >= 10:
                     result = subprocess.run(
-                        ["powershell", "-Command", "Get-Clipboard"],
-                        capture_output=True, timeout=5
+                        ["powershell", "-Command", "Get-Clipboard"], capture_output=True, timeout=5
                     )
                     if result.returncode == 0:
                         return result.stdout
@@ -1421,7 +1464,8 @@ class Kernel:
             try:
                 result = subprocess.run(
                     ["powershell", "-Command", "Get-Content", "clipboard:"],
-                    capture_output=True, timeout=5
+                    capture_output=True,
+                    timeout=5,
                 )
                 if result.returncode == 0:
                     return result.stdout
