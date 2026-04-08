@@ -1160,8 +1160,11 @@ class Kernel:
                 or "default"
             )
             if not name:
-                return b"Usage: session send [name] [--text <text>] [--newline] [--key <key>]", 1
-            text = str(ctx.env.get("text", "") or (positional[1] if len(positional) > 1 else ""))
+                return b"Usage: session send-input [name] <text> [--newline] [--key <key>]", 1
+            # Join remaining positional args, excluding flags (args starting with --)
+            raw_args = ctx.env.get("__raw_args__", [])
+            text_parts = [a for a in positional[1:] if not a.startswith("--")]
+            text = str(ctx.env.get("text", "") or " ".join(text_parts) if text_parts else "")
             newline = bool(ctx.env.get("newline"))
             key = str(ctx.env.get("key", "")).lower()
             if key:
