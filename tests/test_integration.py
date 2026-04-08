@@ -222,16 +222,12 @@ class TestSessionLifecycle:
         assert "session output" in result.processed
 
     async def test_session_send_input_and_output(self, kernel: Kernel) -> None:
-        if os.name == "nt":
-            pytest.skip("psmux sessions don't work well without TTY on Windows")
         await kernel.dispatch("session create io-test")
 
         if os.name == "nt":
-            # PowerShell syntax - use Write-Output with explicit string
-            await kernel.dispatch('session send-input io-test "Write-Output hello" --newline')
-            await kernel.dispatch('session send-input io-test "Write-Output world" --newline')
+            await kernel.dispatch("session send-input io-test Write-Output hello --newline")
+            await kernel.dispatch("session send-input io-test Write-Output world --newline")
         else:
-            # Bash syntax
             await kernel.dispatch('session send-input io-test "echo hello" --newline')
             await kernel.dispatch('session send-input io-test "echo world" --newline')
 
@@ -341,7 +337,11 @@ class TestRegistry:
 
 class TestPipeline:
     async def test_pipeline_two_commands_chained(self, kernel: Kernel) -> None:
-        result = await kernel.dispatch("test echo --message ok | shell run --command 'cat'")
+        # Use 'sort' which exists on both Unix and Windows (as Sort-Object wrapper)
+        if os.name == "nt":
+            result = await kernel.dispatch("test echo --message ok | shell run --command 'Sort-Object'")
+        else:
+            result = await kernel.dispatch("test echo --message ok | shell run --command 'cat'")
         assert result.exit_code == 0
         assert "ok" in result.processed
 

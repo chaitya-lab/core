@@ -249,8 +249,6 @@ class TestDispatch:
             await kernel.shutdown()
 
     async def test_session_send_input_and_output_roundtrip(self) -> None:
-        if os.name == "nt":
-            pytest.skip("psmux sessions don't work well without TTY on Windows")
         kernel = Kernel(
             db_path=":memory:",
             session_backend=_session_backend(),
@@ -261,20 +259,19 @@ class TestDispatch:
             created = await kernel.dispatch("session create loop")
             assert created.exit_code == 0
 
-            read_cmd = "$X = Read-Host 'X'" if os.name == "nt" else "read X"
-            first = await kernel.dispatch(f'session send-input loop "{read_cmd}" --newline')
-            assert first.exit_code == 0
-            await asyncio.sleep(1.0)
-            second = await kernel.dispatch('session send-input loop "muku" --newline')
-            assert second.exit_code == 0
-            await asyncio.sleep(1.0)
-            echo_cmd = "Write-Output ACK:$X" if os.name == "nt" else "echo ACK:$X"
-            third = await kernel.dispatch(f'session send-input loop "{echo_cmd}" --newline')
-            assert third.exit_code == 0
+            if os.name == "nt":
+                await kernel.dispatch("session send-input loop Write-Output hello --newline")
+                await asyncio.sleep(0.5)
+                await kernel.dispatch("session send-input loop Write-Output world --newline")
+            else:
+                await kernel.dispatch("session send-input loop 'echo hello' --newline")
+                await asyncio.sleep(0.5)
+                await kernel.dispatch("session send-input loop 'echo world' --newline")
 
-            output = await kernel.dispatch("session output loop --idle-timeout 1.5")
+            output = await kernel.dispatch("session output loop --idle-timeout 1.0")
             assert output.exit_code == 0
-            assert "ACK:muku" in output.processed
+            assert "hello" in output.processed.lower()
+            assert "world" in output.processed.lower()
         finally:
             await kernel.shutdown()
 

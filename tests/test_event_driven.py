@@ -150,13 +150,11 @@ class TestEventDrivenFlow:
 
     async def test_session_send_input_captures_output(self, kernel: Kernel) -> None:
         """Test session send-input and output work correctly."""
-        if os.name == "nt":
-            pytest.skip("psmux sessions don't work well without TTY on Windows")
         r = await kernel.dispatch("session create io-demo")
         assert r.exit_code == 0
 
         if os.name == "nt":
-            await kernel.dispatch("session send-input io-demo 'Write-Output hello world' --newline")
+            await kernel.dispatch("session send-input io-demo Write-Output hello --newline")
         else:
             await kernel.dispatch("session send-input io-demo 'echo hello world' --newline")
 
