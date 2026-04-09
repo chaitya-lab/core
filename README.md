@@ -110,8 +110,9 @@ chaitya config paths
 
 ```bash
 chaitya session create demo
-chaitya session send demo --text "echo session-ok" --newline
+chaitya session send-input demo "echo session-ok" --newline
 chaitya session output demo
+chaitya session view demo
 ```
 
 ## Common Workflows
@@ -135,6 +136,7 @@ chaitya input --text "ok" | chaitya shell run --command "cat"
 ```bash
 chaitya config get session.backend
 chaitya config set llm.model gpt-5
+chaitya config set kernel.log_level debug
 chaitya config list
 chaitya config paths
 ```
@@ -152,7 +154,7 @@ chaitya watch --live --session demo --timeout 30
 ```bash
 chaitya test ask
 chaitya input list
-chaitya input respond <request_id> Alice
+chaitya session send-input default Alice --newline
 ```
 
 ## Configuration
@@ -204,7 +206,9 @@ disabled_adapters:
 - [Usage](docs/usage.md)
 - [Architecture](docs/architecture.md)
 - [Adapter Development](docs/adapters-dev.md)
+- [Adapters Workspace](adaptors/README.md)
 - [Windows Support](docs/WINDOWS_SUPPORT.md)
+- [Acknowledgements](docs/ACKNOWLEDGEMENTS.md)
 - [SDK Guide](sdk/README.md)
 - [Contributing](CONTRIBUTING.md)
 

@@ -145,10 +145,10 @@ raise Suspension(
 The runtime flow is:
 
 1. the adapter suspends
-2. the kernel stores the pending request
-3. the user runs `chaitya input list`
-4. the user runs `chaitya input respond <request_id> <value>`
-5. the kernel resumes the adapter
+2. the kernel records the adapter command against the current session and marks that session as waiting
+3. the user runs `chaitya input list` to see waiting sessions
+4. the user resumes the session with `chaitya session send-input <session> <value>`
+5. the kernel resumes the adapter command inside that session
 
 ## Session-Backed Adapters
 

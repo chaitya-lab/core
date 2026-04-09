@@ -191,7 +191,9 @@ This is PTY-style interaction with a named shell session:
 
 - `session create`
 - `session send`
+- `session send-input`
 - `session output`
+- `session view`
 - `session signal`
 - `session set-env`
 - `session unset-env`
@@ -207,11 +209,12 @@ An adapter can request structured input by raising `Suspension(InputSpec(...))`.
 Flow:
 
 1. the adapter requests input
-2. the kernel stores the pending request and emits `input_requested`
-3. the user responds with `input respond <request_id> <value>`
-4. the adapter resumes and the kernel emits `input_response`
+2. the kernel marks the session as waiting and emits `input_requested`
+3. the user checks waiting sessions with `input list`
+4. the user resumes the session with `session send-input <session> <value>`
+5. the adapter resumes and the kernel emits `input_response`
 
-Use this when the adapter needs structured user input rather than terminal input.
+In current builds, suspended adapter commands are resumed through the session layer rather than a separate kernel-managed pending-input queue.
 
 ### L0 Ingest
 

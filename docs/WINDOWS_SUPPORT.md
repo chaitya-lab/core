@@ -69,7 +69,9 @@ The Windows backend provides the same session commands:
 - `session list`
 - `session status`
 - `session send`
+- `session send-input`
 - `session output`
+- `session view`
 - `session set-env`
 - `session unset-env`
 - `session signal`
@@ -87,10 +89,11 @@ Session templates and session exec gating work the same way on Windows as on oth
 
 ```powershell
 chaitya session create win-demo
-chaitya session send win-demo --text "Write-Output 'hello'" --newline
+chaitya session send-input win-demo "Write-Output 'hello'" --newline
 chaitya session output win-demo
+chaitya session view win-demo
 chaitya session set-env win-demo --key CHAITYA_TEST --value value
-chaitya session send win-demo --text "Write-Output `$env:CHAITYA_TEST" --newline
+chaitya session send-input win-demo "Write-Output `$env:CHAITYA_TEST" --newline
 chaitya session output win-demo
 chaitya session kill win-demo
 ```

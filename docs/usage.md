@@ -85,7 +85,7 @@ Send input:
 
 ```bash
 chaitya session send demo --text "echo hello"
-chaitya session send demo --newline
+chaitya session send-input demo "echo hello" --newline
 ```
 
 Use keys for simple control input:
@@ -99,6 +99,7 @@ Read recent output:
 
 ```bash
 chaitya session output demo --idle-timeout 0.4
+chaitya session view demo
 ```
 
 Manage environment variables:
@@ -158,17 +159,19 @@ Trigger an example request:
 chaitya test ask
 ```
 
-List pending requests:
+List sessions currently waiting for input:
 
 ```bash
 chaitya input list
 ```
 
-Respond to a request:
+Resume the waiting session directly:
 
 ```bash
-chaitya input respond <request_id> Alice
+chaitya session send-input default Alice --newline
 ```
+
+`input respond` still exists as a compatibility message, but session-backed adapter commands now resume through `session send-input`.
 
 ## L0 Ingest
 
@@ -264,6 +267,7 @@ chaitya test emit --name custom --payload "{\"ok\":true}"
 chaitya config get session.backend
 chaitya config get llm.model
 chaitya config set browser.headless true
+chaitya config set kernel.log_level debug
 chaitya config list
 chaitya config list browser
 chaitya config paths
