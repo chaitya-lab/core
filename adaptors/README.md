@@ -14,6 +14,11 @@ adaptors/
 
 These are the repository's system adapters:
 
+- `info` - Show system, adapter, or kernel information
+- `session` - Manage named running environments (sessions)
+- `input` - L0 Ingest: provide input data to the pipeline
+- `output` - L2 Present: format and filter command output
+- `watch` - Observe events: query history or stream live
 - `file` - Read and write local files
 - `shell` - Execute one-off shell commands
 - `route` - Conditional routing inside pipelines

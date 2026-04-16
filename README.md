@@ -24,18 +24,18 @@ Chaitya currently provides:
 - adapter discovery from local workspaces and Python entry points
 - an SDK for adapter authors
 
-Kernel-dispatched commands:
+Kernel-dispatched commands (also available as core adapters in `adaptors/core/`):
 
-- `info`
-- `session`
-- `input`
-- `output`
-- `watch`
-- `registry`
+- `info` - Show system, adapter, or kernel information
+- `session` - Manage named running environments (sessions)
+- `input` - L0 Ingest: provide input data to the pipeline
+- `output` - L2 Present: format and filter command output
+- `watch` - Observe events: query history or stream live
+- `registry` - Adapter discovery and validation
 
 First-party adapters in this repository:
 
-- system adapters in `adaptors/core/`: `file`, `shell`, `route`, `process`, `registry`
+- system adapters in `adaptors/core/`: `info`, `session`, `input`, `output`, `watch`, `file`, `shell`, `route`, `process`, `registry`
 - community adapters in `adaptors/community/`: `browser`, `browser2`, `config`, `desktop`, `gui`, `test`, `watchdog`
 
 ## Mental Model
