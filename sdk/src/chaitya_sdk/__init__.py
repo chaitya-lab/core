@@ -26,6 +26,7 @@ from chaitya_sdk.context import (  # noqa: F401
     check_fs_write,
     check_network,
     event_bus,
+    kernel_info,
     registry_proxy,
     session_manager,
     store,
@@ -157,4 +158,6 @@ __all__ = [
     "check_fs_read",
     "check_fs_write",
     "check_network",
+    # Kernel info
+    "kernel_info",
 ]

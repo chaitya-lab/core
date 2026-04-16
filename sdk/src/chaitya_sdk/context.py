@@ -378,3 +378,44 @@ def check_network() -> None:
             "make network requests",
             "Adapter contract does not grant network permission.",
         )
+
+
+# ---------------------------------------------------------------------------
+# Kernel info proxy — provides kernel version, uptime, adapter list
+# ---------------------------------------------------------------------------
+
+
+class KernelInfoProxy:
+    """Adapter-facing kernel info proxy.
+
+    The kernel injects kernel info at boot time via ``set_kernel_info()``.
+    This allows adapters like ``info`` and ``watch`` to access kernel metadata.
+    """
+
+    def __init__(self) -> None:
+        self._info: dict[str, Any] = {}
+
+    def set_kernel_info(self, info: dict[str, Any]) -> None:
+        self._info = info
+
+    def get(self, key: str, default: Any = None) -> Any:
+        return self._info.get(key, default)
+
+    @property
+    def version(self) -> str:
+        return self._info.get("version", "")
+
+    @property
+    def cli_name(self) -> str:
+        return self._info.get("cli_name", "chaitya")
+
+    @property
+    def uptime_seconds(self) -> float:
+        return self._info.get("uptime_seconds", 0.0)
+
+    @property
+    def adapters_loaded(self) -> list[str]:
+        return self._info.get("adapters_loaded", [])
+
+
+kernel_info = KernelInfoProxy()

@@ -34,6 +34,7 @@ if TYPE_CHECKING:
 from chaitya_sdk.context import (
     _configure_permissions,
     event_bus as sdk_event_bus,
+    kernel_info as sdk_kernel_info,
     registry_proxy,
     session_manager as sdk_session_manager,
     store as sdk_store,
@@ -1117,6 +1118,14 @@ class Kernel:
         sdk_event_bus._configure(self._adapter_bus, name, sdk_perms)
         sdk_session_manager.set_session_manager(self._session_mgr)
         sdk_store.set_store(self._store)
+        sdk_kernel_info.set_kernel_info(
+            {
+                "version": __version__,
+                "cli_name": self.cli_name,
+                "uptime_seconds": self.uptime_seconds,
+                "adapters_loaded": list(self._registry.loaded_names),
+            }
+        )
         _configure_permissions(name, sdk_perms)
         sdk_stream = SdkChaityaStream(
             content=input_stream.content,

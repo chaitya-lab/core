@@ -288,6 +288,8 @@ class EventFilter:
     event_types: list[str] | None = None
     source_adapter: str | None = None
     session_id: str | None = None
+    since: Any | None = None
+    until: Any | None = None
     request_id: str | None = None
     limit: int | None = None
 
@@ -296,12 +298,16 @@ class EventFilter:
         event_types: list[str] | None = None,
         source_adapter: str | None = None,
         session_id: str | None = None,
+        since: Any | None = None,
+        until: Any | None = None,
         request_id: str | None = None,
         limit: int | None = None,
     ) -> None:
         self.event_types = event_types
         self.source_adapter = source_adapter
         self.session_id = session_id
+        self.since = since
+        self.until = until
         self.request_id = request_id
         self.limit = limit
 
