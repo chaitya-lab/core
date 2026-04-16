@@ -401,6 +401,9 @@ class AdapterPackage:
 
     name: str = ""
     entry_point: str = ""
+    module_name: str = ""
+    module_path: Path | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
     contract: AdapterContract = field(default_factory=AdapterContract)
     handler: Callable[..., Any] | None = None
     adapter_type: AdapterType = AdapterType.USER

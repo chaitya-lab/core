@@ -34,8 +34,10 @@ if TYPE_CHECKING:
 from chaitya_sdk.context import (
     _configure_permissions,
     event_bus as sdk_event_bus,
+    registry_proxy,
+    session_manager as sdk_session_manager,
+    store as sdk_store,
 )
-from chaitya_sdk.context import registry_proxy
 from chaitya_sdk.types import (
     AdapterPermissions as SdkAdapterPermissions,
 )
@@ -74,7 +76,9 @@ from chaitya.core.types import (
     KERNEL_STARTED,
     SESSION_RESUMED,
     SESSION_WAITING,
+    AdapterContract,
     AdapterLoadError,
+    AdapterPackage,
     AdapterPermissions,
     ChaityaStream,
     CommandOutput,
@@ -128,67 +132,341 @@ def _configure_kernel_logging(log_file: str = "", log_level: str = "info") -> No
 # Call once at module load with defaults
 _configure_kernel_logging()
 
-KERNEL_COMMAND_INFO = {
+_KERNEL_COMMAND_CONTRACTS: dict[str, dict] = {
     "info": {
-        "description": "Show system or adapter information",
-        "commands": {
-            "info": "Show this overview",
-            "info <adapter>": "Show adapter contract details",
-            "info --kernel": "Show kernel status",
+        "name": "info",
+        "description": "Show system or adapter information.",
+        "contract_version": "1",
+        "depends_on": [],
+        "commands": [
+            {
+                "name": "info",
+                "description": "Show overview, adapter details, or kernel status.",
+                "params": [
+                    {"name": "kernel", "required": False, "description": "Show kernel status."},
+                ],
+                "examples": ["chaitya info", "chaitya info file", "chaitya info --kernel"],
+            },
+        ],
+        "permissions": {
+            "fs_read": ["."],
+            "fs_write": [],
+            "network": False,
+            "can_emit_events": False,
         },
     },
     "session": {
-        "description": "Manage named running environments",
-        "commands": {
-            "session list": "List all sessions",
-            "session create <name>": "Create a new session",
-            "session status <name>": "Show session state",
-            "session attach <name>": "Attach to session terminal",
-            "session detach": "Detach from current session",
-            "session output <name>": "Show recent session output",
-            "session send <name> <text>": "Send input to session",
-            "session set-env <name> <key> <value>": "Set environment variable",
-            "session signal <name> <signal>": "Send signal (TERM, KILL, INT, HUP)",
-            "session kill <name>": "Terminate session",
+        "name": "session",
+        "description": "Manage named running environments (sessions).",
+        "contract_version": "1",
+        "depends_on": [],
+        "commands": [
+            {
+                "name": "list",
+                "description": "List all sessions.",
+                "params": [],
+                "examples": ["chaitya session list"],
+            },
+            {
+                "name": "create",
+                "description": "Create a new session.",
+                "params": [
+                    {"name": "name", "required": True, "description": "Session name."},
+                    {"name": "template", "required": False, "description": "Template name."},
+                ],
+                "examples": [
+                    "chaitya session create my-session",
+                    "chaitya session create dev --template claude-code",
+                ],
+            },
+            {
+                "name": "status",
+                "description": "Show session state and info.",
+                "params": [{"name": "name", "required": True, "description": "Session name."}],
+                "examples": ["chaitya session status my-session"],
+            },
+            {
+                "name": "attach",
+                "description": "Attach to session terminal (tmux).",
+                "params": [{"name": "name", "required": True, "description": "Session name."}],
+                "examples": ["chaitya session attach my-session"],
+            },
+            {
+                "name": "detach",
+                "description": "Detach from session.",
+                "params": [{"name": "name", "required": True, "description": "Session name."}],
+                "examples": ["chaitya session detach my-session"],
+            },
+            {
+                "name": "output",
+                "description": "Read session terminal output.",
+                "params": [
+                    {"name": "name", "required": True, "description": "Session name."},
+                    {
+                        "name": "idle-timeout",
+                        "required": False,
+                        "description": "Idle timeout in seconds.",
+                    },
+                ],
+                "examples": [
+                    "chaitya session output my-session",
+                    "chaitya session output my-session --idle-timeout 1.0",
+                ],
+            },
+            {
+                "name": "send",
+                "description": "Send input to session.",
+                "params": [
+                    {"name": "name", "required": True, "description": "Session name."},
+                    {"name": "text", "required": False, "description": "Text to send."},
+                    {"name": "newline", "required": False, "description": "Append newline."},
+                    {
+                        "name": "key",
+                        "required": False,
+                        "description": "Key name (enter/tab/space).",
+                    },
+                ],
+                "examples": ["chaitya session send my-session --text 'echo hello' --newline"],
+            },
+            {
+                "name": "signal",
+                "description": "Send signal to session.",
+                "params": [
+                    {"name": "name", "required": True, "description": "Session name."},
+                    {
+                        "name": "sig",
+                        "required": True,
+                        "description": "Signal name (TERM, KILL, INT, HUP).",
+                    },
+                ],
+                "examples": ["chaitya session signal my-session SIGTERM"],
+            },
+            {
+                "name": "set-env",
+                "description": "Set environment variable in session.",
+                "params": [
+                    {"name": "name", "required": True, "description": "Session name."},
+                    {"name": "key", "required": True, "description": "Variable name."},
+                    {"name": "value", "required": True, "description": "Variable value."},
+                ],
+                "examples": ["chaitya session set-env my-session --key FOO --value bar"],
+            },
+            {
+                "name": "unset-env",
+                "description": "Remove environment variable from session.",
+                "params": [
+                    {"name": "name", "required": True, "description": "Session name."},
+                    {"name": "key", "required": True, "description": "Variable name."},
+                ],
+                "examples": ["chaitya session unset-env my-session --key FOO"],
+            },
+            {
+                "name": "exec",
+                "description": "Manage execution mode (enabled/disabled/readonly).",
+                "params": [
+                    {
+                        "name": "action",
+                        "required": True,
+                        "description": "Action: enable, disable, readonly, status.",
+                    },
+                    {"name": "name", "required": False, "description": "Session name."},
+                ],
+                "examples": [
+                    "chaitya session exec disable my-session",
+                    "chaitya session exec status my-session",
+                ],
+            },
+            {
+                "name": "kill",
+                "description": "Kill a session.",
+                "params": [{"name": "name", "required": True, "description": "Session name."}],
+                "examples": ["chaitya session kill my-session"],
+            },
+        ],
+        "permissions": {
+            "fs_read": ["."],
+            "fs_write": ["/tmp"],
+            "network": False,
+            "can_emit_events": True,
         },
     },
     "input": {
-        "description": "L0 Ingest and session input handling",
-        "commands": {
-            "input --text <text>": "Create stream from text",
-            "input --file <path>": "Create stream from file",
-            "input --clipboard": "Create stream from clipboard",
-            "input list": "List sessions waiting for input",
+        "name": "input",
+        "description": "L0 Ingest: provide input data to the pipeline.",
+        "contract_version": "1",
+        "depends_on": [],
+        "commands": [
+            {
+                "name": "--text",
+                "description": "Create stream from text.",
+                "params": [{"name": "text", "required": False, "description": "Text content."}],
+                "examples": ["chaitya input --text 'hello world'"],
+            },
+            {
+                "name": "--file",
+                "description": "Create stream from file.",
+                "params": [
+                    {
+                        "name": "file",
+                        "required": False,
+                        "description": "File path.",
+                        "multiple": True,
+                    }
+                ],
+                "examples": [
+                    "chaitya input --file myfile.txt",
+                    "chaitya input --file a.txt --file b.txt --merge concat",
+                ],
+            },
+            {
+                "name": "--clipboard",
+                "description": "Create stream from clipboard.",
+                "params": [],
+                "examples": ["chaitya input --clipboard"],
+            },
+        ],
+        "permissions": {
+            "fs_read": ["."],
+            "fs_write": [],
+            "network": False,
+            "can_emit_events": False,
         },
     },
     "output": {
-        "description": "Format and filter command output",
-        "commands": {
-            "output --filter <pattern>": "Filter output by pattern",
-            "output --format json|text": "Set output format",
-        },
+        "name": "output",
+        "description": "L2 Present: format and filter command output.",
+        "contract_version": "1",
+        "depends_on": [],
+        "commands": [
+            {
+                "name": "--format",
+                "description": "Set output format.",
+                "params": [
+                    {"name": "format", "required": False, "description": "Format: text, json."}
+                ],
+                "examples": ["chaitya output --format json"],
+            },
+            {
+                "name": "--filter",
+                "description": "Filter output lines by pattern.",
+                "params": [{"name": "filter", "required": False, "description": "Filter pattern."}],
+                "examples": ["chaitya output --filter ERROR"],
+            },
+        ],
+        "permissions": {"fs_read": [], "fs_write": [], "network": False, "can_emit_events": False},
     },
     "watch": {
-        "description": "Monitor events in real-time",
-        "commands": {
-            "watch --all": "Watch all events",
-            "watch --session <name>": "Watch session events",
-            "watch --search <query>": "Search event log",
-            "watch --live --session <name>": "Live stream session events",
-        },
+        "name": "watch",
+        "description": "Observe events: query history or stream live.",
+        "contract_version": "1",
+        "depends_on": [],
+        "commands": [
+            {
+                "name": "--all",
+                "description": "Watch all events (history query).",
+                "params": [
+                    {"name": "on", "required": False, "description": "Event type filter."},
+                    {
+                        "name": "exit-after",
+                        "required": False,
+                        "description": "Exit after N events.",
+                    },
+                    {"name": "limit", "required": False, "description": "Max events to return."},
+                ],
+                "examples": [
+                    "chaitya watch --all",
+                    "chaitya watch --all --on session_created --limit 10",
+                ],
+            },
+            {
+                "name": "--session",
+                "description": "Watch events for a session.",
+                "params": [
+                    {"name": "name", "required": True, "description": "Session name."},
+                    {"name": "on", "required": False, "description": "Event type filter."},
+                    {
+                        "name": "exit-after",
+                        "required": False,
+                        "description": "Exit after N events.",
+                    },
+                ],
+                "examples": ["chaitya watch --session my-session"],
+            },
+            {
+                "name": "--search",
+                "description": "Full-text search of event log.",
+                "params": [
+                    {"name": "query", "required": True, "description": "Search query."},
+                    {
+                        "name": "since",
+                        "required": False,
+                        "description": "Since duration (e.g. 60s).",
+                    },
+                ],
+                "examples": [
+                    "chaitya watch --search ERROR",
+                    "chaitya watch --search timeout --since 300s",
+                ],
+            },
+            {
+                "name": "--live",
+                "description": "Stream live events (real-time).",
+                "params": [
+                    {"name": "session", "required": False, "description": "Session name."},
+                    {"name": "on", "required": False, "description": "Event type filter."},
+                    {
+                        "name": "exit-after",
+                        "required": False,
+                        "description": "Exit after N events.",
+                    },
+                    {"name": "timeout", "required": False, "description": "Timeout in seconds."},
+                ],
+                "examples": [
+                    "chaitya watch --live --session my-session",
+                    "chaitya watch --live --all --exit-after 5",
+                ],
+            },
+        ],
+        "permissions": {"fs_read": [], "fs_write": [], "network": False, "can_emit_events": False},
     },
     "registry": {
-        "description": "Manage adapter registry",
-        "commands": {
-            "registry list": "List installed adapters",
-            "registry disable <name>": "Disable an adapter",
-            "registry enable <name>": "Enable an adapter",
-            "registry validate <name>": "Validate adapter contract",
-        },
+        "name": "registry",
+        "description": "Manage adapter registry.",
+        "contract_version": "1",
+        "depends_on": [],
+        "commands": [
+            {
+                "name": "list",
+                "description": "List all installed adapters.",
+                "params": [],
+                "examples": ["chaitya registry list"],
+            },
+            {
+                "name": "disable",
+                "description": "Disable an adapter.",
+                "params": [{"name": "name", "required": True, "description": "Adapter name."}],
+                "examples": ["chaitya registry disable my-adapter"],
+            },
+            {
+                "name": "enable",
+                "description": "Enable an adapter.",
+                "params": [{"name": "name", "required": True, "description": "Adapter name."}],
+                "examples": ["chaitya registry enable my-adapter"],
+            },
+            {
+                "name": "validate",
+                "description": "Validate an adapter contract.",
+                "params": [{"name": "name", "required": True, "description": "Adapter name."}],
+                "examples": ["chaitya registry validate my-adapter"],
+            },
+        ],
+        "permissions": {"fs_read": [], "fs_write": [], "network": False, "can_emit_events": False},
     },
 }
 
 # System adapters whose load failure halts boot (PRD §3.6)
+# Kernel commands are always available (registered at boot):
+# info, session, input, output, watch, registry
 DEFAULT_SYSTEM_ADAPTERS = frozenset({"file", "shell", "route", "process", "registry"})
 
 
@@ -667,13 +945,55 @@ class Kernel:
     # -- Kernel Command Handlers (PRD §5) --
 
     def _register_kernel_handlers(self) -> None:
-        """Register the 6 kernel commands as pipeline handlers."""
-        self._pipeline.register_handler("info", self._handle_info)
-        self._pipeline.register_handler("session", self._handle_session)
-        self._pipeline.register_handler("input", self._handle_input)
-        self._pipeline.register_handler("output", self._handle_output)
-        self._pipeline.register_handler("watch", self._handle_watch)
-        self._pipeline.register_handler("registry", self._handle_registry)
+        """Register the 6 kernel commands as adapter handlers in the registry.
+
+        These handlers are kernel-owned but registered as adapter handlers so they
+        participate in the same pipeline flow as regular adapters. The kernel
+        injects its internals (session_manager, store) into the SDK context
+        so these handlers can access them.
+        """
+        from dataclasses import asdict
+
+        for name, method, contract_dict in [
+            ("info", self._handle_info, _KERNEL_COMMAND_CONTRACTS.get("info", {})),
+            ("session", self._handle_session, _KERNEL_COMMAND_CONTRACTS.get("session", {})),
+            ("input", self._handle_input, _KERNEL_COMMAND_CONTRACTS.get("input", {})),
+            ("output", self._handle_output, _KERNEL_COMMAND_CONTRACTS.get("output", {})),
+            ("watch", self._handle_watch, _KERNEL_COMMAND_CONTRACTS.get("watch", {})),
+            ("registry", self._handle_registry, _KERNEL_COMMAND_CONTRACTS.get("registry", {})),
+        ]:
+            pkg = AdapterPackage(
+                name=name,
+                module_name="kernel",
+                module_path=Path(__file__),
+                adapter_type="kernel_command",
+                contract=None,
+                handler=method,
+                metadata={},
+            )
+            if contract_dict:
+                perms_dict = contract_dict.get("permissions", {})
+                if perms_dict:
+                    perms_dict = AdapterPermissions(**perms_dict)
+                else:
+                    perms_dict = AdapterPermissions()
+                pkg.contract = AdapterContract(
+                    name=name,
+                    description=contract_dict.get("description", ""),
+                    permissions=perms_dict,
+                )
+            else:
+                pkg.contract = None
+            self._registry.loaded_adapters[name] = pkg
+            self._pipeline.register_handler(
+                name,
+                self._make_adapter_handler(
+                    name,
+                    method,
+                    pkg.contract.permissions if pkg.contract else AdapterPermissions(),
+                    pkg.contract,
+                ),
+            )
 
     def _register_loaded_adapter_handlers(self) -> None:
         for name, package in self._registry.loaded_adapters.items():
@@ -706,6 +1026,10 @@ class Kernel:
 
         return _wrapped
 
+    def _get_ctx_args(self, ctx: Any) -> dict[str, Any]:
+        """Get args dict from context, supporting both PipelineContext and SdkSessionContext."""
+        return getattr(ctx, "args", None) or getattr(ctx, "env", {})
+
     def _build_sdk_context(
         self,
         ctx: PipelineContext,
@@ -726,6 +1050,7 @@ class Kernel:
             dry_run=ctx.dry_run,
         )
         session_ctx._kernel = self  # type: ignore[attr-defined]
+        session_ctx.kernel_uptime = self.uptime_seconds  # type: ignore[attr-defined]
         return session_ctx
 
     def _inject_missing_suspend_args(
@@ -790,6 +1115,8 @@ class Kernel:
 
         sdk_perms = SdkAdapterPermissions(**permissions.__dict__)
         sdk_event_bus._configure(self._adapter_bus, name, sdk_perms)
+        sdk_session_manager.set_session_manager(self._session_mgr)
+        sdk_store.set_store(self._store)
         _configure_permissions(name, sdk_perms)
         sdk_stream = SdkChaityaStream(
             content=input_stream.content,
@@ -1057,17 +1384,6 @@ class Kernel:
                     lines.append(f"Dependencies: {', '.join(c.depends_on)}")
                 return "\n".join(lines).encode("utf-8"), 0
 
-        if adapter_name in KERNEL_COMMAND_INFO:
-            info = KERNEL_COMMAND_INFO[adapter_name]
-            lines = [
-                f"Kernel Command: {adapter_name}",
-                f"Description: {info['description']}",
-                "Commands:",
-            ]
-            for cmd, desc in info["commands"].items():
-                lines.append(f"  {cmd:32s} {desc}")
-            return "\n".join(lines).encode("utf-8"), 0
-
         # Default: compact overview for LLM consumption
         sessions = await self._store.list_sessions()
         active = [s for s in sessions if s.state.value not in ("dead",)]
@@ -1105,8 +1421,9 @@ class Kernel:
         self, input_stream: ChaityaStream, ctx: PipelineContext
     ) -> tuple[bytes, int]:
         """Handle ``session <subcommand>``."""
-        sub = ctx.env.get("__subcommand__", "list")
-        positional = ctx.env.get("__args__", [])
+        args = self._get_ctx_args(ctx)
+        sub = args.get("subcommand", args.get("__subcommand__", "list"))
+        positional = args.get("__raw_args__", args.get("__args__", []))
 
         if sub == "list":
             records = await self._store.list_sessions()
@@ -1120,7 +1437,7 @@ class Kernel:
             return "\n".join(lines).encode("utf-8"), 0
 
         if sub == "status":
-            name = ctx.env.get("name") or (positional[0] if positional else "")
+            name = args.get("name") or (positional[0] if positional else "")
             if not name:
                 return b"Usage: session status <name>", 1
             rec = await self._store.get_session(name)
@@ -1137,7 +1454,7 @@ class Kernel:
 
         if sub == "exec":
             action = positional[0] if positional else ""
-            name = ctx.env.get("name") or (positional[1] if len(positional) > 1 else "")
+            name = args.get("name") or (positional[1] if len(positional) > 1 else "")
             if action == "status":
                 if not name:
                     return b"Usage: session exec status <name>", 1
@@ -1164,10 +1481,10 @@ class Kernel:
             ), 1
 
         if sub == "create":
-            name = ctx.env.get("name") or (positional[0] if positional else "")
+            name = args.get("name") or (positional[0] if positional else "")
             if not name:
                 return b"Usage: session create <name> [--template <template-name>]", 1
-            template = ctx.env.get("template")
+            template = args.get("template")
             try:
                 handle = await self._session_mgr.create(name=name, template=template)
                 msg = f"Session '{name}' created"
@@ -1180,19 +1497,17 @@ class Kernel:
 
         if sub in ("send", "send-input"):
             name = (
-                ctx.env.get("name")
+                args.get("name")
                 or (positional[0] if positional else "")
                 or ctx.session_id
                 or "default"
             )
             if not name:
                 return b"Usage: session send-input [name] <text> [--newline] [--key <key>]", 1
-            # Join remaining positional args, excluding flags (args starting with --)
-            raw_args = ctx.env.get("__raw_args__", [])
             text_parts = [a for a in positional[1:] if not a.startswith("--")]
-            text = str(ctx.env.get("text", "") or " ".join(text_parts) if text_parts else "")
-            newline = bool(ctx.env.get("newline"))
-            key = str(ctx.env.get("key", "")).lower()
+            text = str(args.get("text", "") or " ".join(text_parts) if text_parts else "")
+            newline = bool(args.get("newline"))
+            key = str(args.get("key", "")).lower()
             if key:
                 key_map = {
                     "enter": b"\n",
@@ -1214,10 +1529,10 @@ class Kernel:
                 return str(exc).encode("utf-8"), 1
 
         if sub == "output":
-            name = ctx.env.get("name") or (positional[0] if positional else "")
+            name = args.get("name") or (positional[0] if positional else "")
             if not name:
                 return b"Usage: session output <name> [--idle-timeout 0.2]", 1
-            idle_timeout = float(ctx.env.get("idle-timeout", "0.2"))
+            idle_timeout = float(args.get("idle_timeout", args.get("idle-timeout", "0.2")))
             try:
                 output = await self._session_mgr.read_output(
                     name,
@@ -1228,7 +1543,7 @@ class Kernel:
                 return str(exc).encode("utf-8"), 1
 
         if sub == "attach":
-            name = ctx.env.get("name") or (positional[0] if positional else "")
+            name = args.get("name") or (positional[0] if positional else "")
             if not name:
                 return b"Usage: session attach <name>", 1
             try:
@@ -1238,7 +1553,7 @@ class Kernel:
                 return str(exc).encode("utf-8"), 1
 
         if sub == "view":
-            name = ctx.env.get("name") or (positional[0] if positional else "")
+            name = args.get("name") or (positional[0] if positional else "")
             if not name:
                 return b"Usage: session view <name>", 1
             try:
@@ -1250,7 +1565,7 @@ class Kernel:
                 return str(exc).encode("utf-8"), 1
 
         if sub == "detach":
-            name = ctx.env.get("name") or (positional[0] if positional else "")
+            name = args.get("name") or (positional[0] if positional else "")
             if not name:
                 return b"Usage: session detach <name>", 1
             try:
@@ -1260,10 +1575,10 @@ class Kernel:
                 return str(exc).encode("utf-8"), 1
 
         if sub == "signal":
-            name = ctx.env.get("name") or (positional[0] if positional else "")
+            name = args.get("name") or (positional[0] if positional else "")
             sig = (
-                ctx.env.get("sig")
-                or ctx.env.get("signal")
+                args.get("sig")
+                or args.get("signal")
                 or (positional[1] if len(positional) > 1 else "")
             )
             if not name or not sig:
@@ -1275,9 +1590,9 @@ class Kernel:
                 return str(exc).encode("utf-8"), 1
 
         if sub == "set-env":
-            name = ctx.env.get("name") or (positional[0] if positional else "")
-            key = str(ctx.env.get("key", "") or (positional[1] if len(positional) > 1 else ""))
-            value = str(ctx.env.get("value", ""))
+            name = args.get("name") or (positional[0] if positional else "")
+            key = str(args.get("key", "") or (positional[1] if len(positional) > 1 else ""))
+            value = str(args.get("value", ""))
             if not name or not key:
                 return b"Usage: session set-env <name> --key <KEY> --value <VALUE>", 1
             try:
@@ -1287,8 +1602,8 @@ class Kernel:
                 return str(exc).encode("utf-8"), 1
 
         if sub == "unset-env":
-            name = ctx.env.get("name") or (positional[0] if positional else "")
-            key = str(ctx.env.get("key", "") or (positional[1] if len(positional) > 1 else ""))
+            name = args.get("name") or (positional[0] if positional else "")
+            key = str(args.get("key", "") or (positional[1] if len(positional) > 1 else ""))
             if not name or not key:
                 return b"Usage: session unset-env <name> --key <KEY>", 1
             try:
@@ -1325,8 +1640,9 @@ class Kernel:
             input list                      List pending input requests
             input respond <id> <value>      Respond to a pending request
         """
-        sub = ctx.env.get("__subcommand__", "list")
-        positional = ctx.env.get("__args__", [])
+        args = self._get_ctx_args(ctx)
+        sub = args.get("subcommand", "list")
+        positional = args.get("__raw_args__", [])
 
         if sub == "list":
             sessions = await self._store.list_sessions()
@@ -1352,20 +1668,21 @@ class Kernel:
             pass
         elif sub == "ingest":
             return await self._handle_input_ingest(ctx)
-        elif ctx.env.get("text") or ctx.env.get("file") or ctx.env.get("clipboard"):
+        elif args.get("text") or args.get("file") or args.get("clipboard"):
             return await self._handle_input_ingest(ctx)
 
         return f"Unknown input subcommand: {sub}".encode(), 1
 
     async def _handle_input_ingest(self, ctx: PipelineContext) -> tuple[bytes, int]:
         """Handle L0 Ingest — create ChaityaStream from various sources."""
-        text = self._strip_quotes(ctx.env.get("text", ""))
-        clipboard = ctx.env.get("clipboard")
-        declared_type = self._strip_quotes(ctx.env.get("type", ""))
-        merge = self._strip_quotes(ctx.env.get("merge", "concat"))
+        args = self._get_ctx_args(ctx)
+        text = self._strip_quotes(args.get("text", ""))
+        clipboard = args.get("clipboard")
+        declared_type = self._strip_quotes(args.get("type", ""))
+        merge = self._strip_quotes(args.get("merge", "concat"))
 
-        files = self._extract_multiple_flags(ctx.env, "file")
-        clipboard_flag = ctx.env.get("clipboard")
+        files = self._extract_multiple_flags(args, "file")
+        clipboard_flag = args.get("clipboard")
 
         content = b""
         mime_type = declared_type or "text/plain"
@@ -1438,7 +1755,7 @@ class Kernel:
 
     def _extract_multiple_flags(self, env: dict[str, Any], flag: str) -> list[str]:
         """Extract multiple values for a flag from raw_args (handles duplicates)."""
-        raw_args = env.get("__args__", [])
+        raw_args = env.get("__raw_args__", env.get("__args__", []))
         values = []
         i = 0
         while i < len(raw_args):
@@ -1527,8 +1844,9 @@ class Kernel:
         The output command is a pipeline modifier. When used standalone,
         it shows the current output configuration.
         """
-        output_format = str(ctx.env.get("format", "text")).lower()
-        filter_pattern = ctx.env.get("filter")
+        args = self._get_ctx_args(ctx)
+        output_format = str(args.get("format", "text")).lower()
+        filter_pattern = args.get("filter")
         if not output_format and not filter_pattern:
             return (
                 b"output configuration:\n"
@@ -1583,16 +1901,17 @@ class Kernel:
         import json
         from datetime import datetime, timedelta
 
-        is_live = bool(ctx.env.get("live"))
-        search_query = ctx.env.get("search")
-        session_id = ctx.env.get("session")
-        exit_after = int(str(ctx.env.get("exit-after", "0")))
-        limit = int(str(ctx.env.get("limit", "100")))
-        since_str = ctx.env.get("since")
-        timeout_str = ctx.env.get("timeout", "0")
+        args = self._get_ctx_args(ctx)
+        is_live = bool(args.get("live"))
+        search_query = args.get("search")
+        session_id = args.get("session")
+        exit_after = int(str(args.get("exit_after", args.get("exit-after", "0"))))
+        limit = int(str(args.get("limit", "100")))
+        since_str = args.get("since")
+        timeout_str = args.get("timeout", "0")
         event_types: list[str] | None = None
-        if ctx.env.get("on"):
-            event_types = [str(ctx.env["on"])]
+        if args.get("on"):
+            event_types = [str(args["on"])]
 
         if is_live:
             return self._watch_live(
@@ -1731,11 +2050,12 @@ class Kernel:
         self, input_stream: ChaityaStream, ctx: PipelineContext
     ) -> tuple[bytes, int]:
         """Handle ``registry list``, ``registry info``, ``registry validate``."""
-        sub = ctx.env.get("__subcommand__", "list")
-        positional = ctx.env.get("__args__", [])
+        args = self._get_ctx_args(ctx)
+        sub = args.get("subcommand", "list")
+        positional = args.get("__raw_args__", [])
 
         if sub == "disable":
-            name = ctx.env.get("name") or (positional[0] if positional else "")
+            name = args.get("name") or (positional[0] if positional else "")
             if not name:
                 return b"Usage: registry disable <adapter-name>\n", 1
             self._registry.disable(name)
@@ -1745,7 +2065,7 @@ class Kernel:
             )
 
         if sub == "enable":
-            name = ctx.env.get("name") or (positional[0] if positional else "")
+            name = args.get("name") or (positional[0] if positional else "")
             if not name:
                 return b"Usage: registry enable <adapter-name>\n", 1
             self._registry.enable(name)
@@ -1777,7 +2097,7 @@ class Kernel:
             return "\n".join(lines).encode("utf-8"), 0
 
         if sub == "info":
-            name = ctx.env.get("name") or (positional[0] if positional else "")
+            name = args.get("name") or (positional[0] if positional else "")
             if not name:
                 return b"Usage: registry info <adapter-name>", 1
             pkg = self._registry.get_adapter(name)
@@ -1812,7 +2132,7 @@ class Kernel:
             return f"Adapter '{name}' has no contract.".encode(), 1
 
         if sub == "validate":
-            name = ctx.env.get("name") or (positional[0] if positional else "")
+            name = args.get("name") or (positional[0] if positional else "")
             pkg = self._registry.get_adapter(name)
             if pkg is None:
                 return f"Adapter '{name}' not found.".encode(), 1

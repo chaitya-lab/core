@@ -176,9 +176,94 @@ class EventBusProxy:
             await bus.unsubscribe(sub)
 
 
+# ---------------------------------------------------------------------------
+# Session Manager proxy — permission-checked wrapper
+# ---------------------------------------------------------------------------
+
+
+class SessionManagerProxy:
+    """Adapter-facing session manager proxy.
+
+    The kernel injects the real SessionManager at boot time via ``set_session_manager()``.
+    This allows the session adapter to manage sessions without importing
+    ``chaitya.core.session_manager``.
+    """
+
+    def __init__(self) -> None:
+        self._mgr: Any = None
+
+    def set_session_manager(self, mgr: Any) -> None:
+        self._mgr = mgr
+
+    def get_session_manager(self) -> Any:
+        if self._mgr is None:
+            raise RuntimeError(
+                "SessionManager not available — adapter may only use session_manager "
+                "inside a handler call, after the kernel has booted."
+            )
+        return self._mgr
+
+
+# ---------------------------------------------------------------------------
+# Store proxy — permission-checked wrapper
+# ---------------------------------------------------------------------------
+
+
+class StoreProxy:
+    """Adapter-facing store proxy.
+
+    The kernel injects the real store at boot time via ``set_store()``.
+    This allows adapters to access session records and event history.
+    """
+
+    def __init__(self) -> None:
+        self._store: Any = None
+
+    def set_store(self, store: Any) -> None:
+        self._store = store
+
+    def get_store(self) -> Any:
+        if self._store is None:
+            raise RuntimeError(
+                "Store not available — adapter may only use store "
+                "inside a handler call, after the kernel has booted."
+            )
+        return self._store
+
+
+# ---------------------------------------------------------------------------
+# Registry proxy — permission-checked wrapper
+# ---------------------------------------------------------------------------
+
+
+class RegistryProxy:
+    """Adapter-facing registry access proxy.
+
+    The kernel injects the real registry at boot time via ``set_registry()``.
+    This allows the registry adapter (and any other adapter that needs to
+    query the registry) to do so without importing ``chaitya.core.registry``.
+    """
+
+    def __init__(self) -> None:
+        self._registry: Any = None
+
+    def set_registry(self, registry: Any) -> None:
+        self._registry = registry
+
+    def get_registry(self) -> Any:
+        if self._registry is None:
+            raise RuntimeError(
+                "Registry not available — adapter may only use registry "
+                "inside a handler call, after the kernel has booted."
+            )
+        return self._registry
+
+
 # Module-level singletons — adapters import these directly.
 event_bus = EventBusProxy()
-_registry_proxy: RegistryProxy | None = None
+session_manager = SessionManagerProxy()
+store = StoreProxy()
+registry_proxy = RegistryProxy()
 
 # Current adapter permissions context — set by kernel before invoking adapter
 _current_permissions: AdapterPermissions = AdapterPermissions()
@@ -293,29 +378,3 @@ def check_network() -> None:
             "make network requests",
             "Adapter contract does not grant network permission.",
         )
-
-
-class RegistryProxy:
-    """Adapter-facing registry access proxy.
-
-    The kernel injects the real registry at boot time via ``set_registry()``.
-    This allows the registry adapter (and any other adapter that needs to
-    query the registry) to do so without importing ``chaitya.core.registry``.
-    """
-
-    def __init__(self) -> None:
-        self._registry: Any = None
-
-    def set_registry(self, registry: Any) -> None:
-        self._registry = registry
-
-    def get_registry(self) -> Any:
-        if self._registry is None:
-            raise RuntimeError(
-                "Registry not available — adapter may only use registry "
-                "inside a handler call, after the kernel has booted."
-            )
-        return self._registry
-
-
-registry_proxy = RegistryProxy()
