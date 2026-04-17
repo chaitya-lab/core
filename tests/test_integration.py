@@ -91,7 +91,7 @@ class TestEventEmission:
         assert result.exit_code == 0
         assert "pong" in result.processed
 
-        history = await kernel.event_bus.history(EventFilter(event_types=["test.ping"]))
+        history = await kernel.event_bus.history(EventFilter(event_types=("test.ping",)))
         assert len(history) >= 1
         assert history[0].type == "test.ping"
         assert history[0].source_adapter == "test"
@@ -101,14 +101,14 @@ class TestEventEmission:
         assert result.exit_code == 0
         assert "custom_test" in result.processed
 
-        history = await kernel.event_bus.history(EventFilter(event_types=["test.custom_test"]))
+        history = await kernel.event_bus.history(EventFilter(event_types=("test.custom_test",)))
         assert len(history) >= 1
         assert history[0].payload.get("key") == 42
 
     async def test_emit_with_raw_payload_fallback(self, kernel: Kernel) -> None:
         result = await kernel.dispatch("test emit --name raw_test --payload not-json")
         assert result.exit_code == 0
-        history = await kernel.event_bus.history(EventFilter(event_types=["test.raw_test"]))
+        history = await kernel.event_bus.history(EventFilter(event_types=("test.raw_test",)))
         assert len(history) >= 1
         assert history[0].payload.get("raw") == "not-json"
 
@@ -181,7 +181,7 @@ class TestSessionInputHandling:
             await asyncio.sleep(0.1)
 
             history = await kernel.event_bus.history(
-                EventFilter(event_types=["test.ask.completed"])
+                EventFilter(event_types=("test.ask.completed",))
             )
             assert len(history) >= 1
             assert history[0].payload.get("name") == "Alice"
@@ -339,7 +339,9 @@ class TestPipeline:
     async def test_pipeline_two_commands_chained(self, kernel: Kernel) -> None:
         # Use 'sort' which exists on both Unix and Windows (as Sort-Object wrapper)
         if os.name == "nt":
-            result = await kernel.dispatch("test echo --message ok | shell run --command 'Sort-Object'")
+            result = await kernel.dispatch(
+                "test echo --message ok | shell run --command 'Sort-Object'"
+            )
         else:
             result = await kernel.dispatch("test echo --message ok | shell run --command 'cat'")
         assert result.exit_code == 0
@@ -466,7 +468,7 @@ class TestConfirmSuspension:
             await asyncio.sleep(0.5)
 
             history = await kernel.event_bus.history(
-                EventFilter(event_types=["test.confirm.completed"])
+                EventFilter(event_types=("test.confirm.completed",))
             )
             assert len(history) >= 1
             assert history[0].payload.get("answer") == "yes"

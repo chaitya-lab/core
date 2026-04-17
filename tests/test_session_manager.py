@@ -108,7 +108,7 @@ class TestSessionManager:
 
     async def test_create_emits_event(self, manager: SessionManager, bus: SqliteEventBus) -> None:
         received: list[Event] = []
-        await bus.subscribe(EventFilter(event_types=[SESSION_CREATED]), received.append)
+        await bus.subscribe(EventFilter(event_types=(SESSION_CREATED,)), received.append)
         await manager.create("ev-test")
         assert len(received) == 1
         assert received[0].session_id == "ev-test"
@@ -122,7 +122,7 @@ class TestSessionManager:
 
     async def test_kill_emits_event(self, manager: SessionManager, bus: SqliteEventBus) -> None:
         received: list[Event] = []
-        await bus.subscribe(EventFilter(event_types=[SESSION_KILLED]), received.append)
+        await bus.subscribe(EventFilter(event_types=(SESSION_KILLED,)), received.append)
         await manager.create("kill-ev")
         await manager.kill("kill-ev")
         assert len(received) == 1
@@ -146,7 +146,7 @@ class TestSessionManager:
         self, manager: SessionManager, bus: SqliteEventBus
     ) -> None:
         received: list[Event] = []
-        await bus.subscribe(EventFilter(event_types=[SESSION_STATE_CHANGED]), received.append)
+        await bus.subscribe(EventFilter(event_types=(SESSION_STATE_CHANGED,)), received.append)
         await manager.create("sc-test")
         await manager.update_state("sc-test", SessionState.BUSY)
         assert len(received) == 1
@@ -157,7 +157,7 @@ class TestSessionManager:
         self, manager: SessionManager, bus: SqliteEventBus
     ) -> None:
         received: list[Event] = []
-        await bus.subscribe(EventFilter(event_types=[SESSION_STATE_CHANGED]), received.append)
+        await bus.subscribe(EventFilter(event_types=(SESSION_STATE_CHANGED,)), received.append)
         await manager.create("noop-test")
         await manager.update_state("noop-test", SessionState.IDLE)  # same as current
         assert len(received) == 0
@@ -220,9 +220,7 @@ class TestTemplateFields:
         templates_dir = tmp_path / "templates"
         templates_dir.mkdir()
         template_file = templates_dir / "git-test.yaml"
-        template_file.write_text(
-            "identity:\n  working_dir: /tmp\n\ngit_worktree: true\n"
-        )
+        template_file.write_text("identity:\n  working_dir: /tmp\n\ngit_worktree: true\n")
 
         mgr = SessionManager(_make_backend(), store, bus, templates_dir=str(templates_dir))
         await mgr.start()
@@ -265,8 +263,7 @@ class TestAutoRestart:
         templates_dir.mkdir()
         template_file = templates_dir / "autorestart.yaml"
         template_file.write_text(
-            "identity:\n  working_dir: /tmp\n\n"
-            "auto_restart_on_kernel_start: true\n"
+            "identity:\n  working_dir: /tmp\n\nauto_restart_on_kernel_start: true\n"
         )
 
         mgr = SessionManager(_make_backend(), store, bus, templates_dir=str(templates_dir))
@@ -284,9 +281,7 @@ class TestAutoRestart:
         templates_dir = tmp_path / "templates"
         templates_dir.mkdir()
         template_file = templates_dir / "noautorestart.yaml"
-        template_file.write_text(
-            "identity:\n  working_dir: /tmp\n\n"
-        )
+        template_file.write_text("identity:\n  working_dir: /tmp\n\n")
 
         mgr = SessionManager(_make_backend(), store, bus, templates_dir=str(templates_dir))
         await mgr.start()
@@ -319,9 +314,7 @@ class TestStuckDetection:
         assert not mgr._stuck_monitor_task.done()
         await mgr.stop()
 
-    async def test_last_activity_updated_on_create(
-        self, manager: SessionManager
-    ) -> None:
+    async def test_last_activity_updated_on_create(self, manager: SessionManager) -> None:
         """Creating a session sets the last_activity timestamp."""
         await manager.create("activity-test")
         assert "activity-test" in manager._last_activity

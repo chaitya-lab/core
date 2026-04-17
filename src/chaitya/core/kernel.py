@@ -1304,7 +1304,7 @@ class Kernel:
                 logger.error("Failed to resume suspended command: %s", exc)
 
         sub = await self._event_bus.subscribe(
-            EventFilter(event_types=[SESSION_INPUT_RECEIVED]),
+            EventFilter(event_types=(SESSION_INPUT_RECEIVED,)),
             _on_input_received,
         )
         self._subscriptions[sub.subscription_id] = sub
@@ -1329,7 +1329,7 @@ class Kernel:
                 logger.error("[route --do] failed: %s — %s", action, exc)
 
         sub = await self._event_bus.subscribe(
-            EventFilter(event_types=["route.action_requested"]),
+            EventFilter(event_types=("route.action_requested",)),
             _on_route_action,
         )
         self._subscriptions[sub.subscription_id] = sub

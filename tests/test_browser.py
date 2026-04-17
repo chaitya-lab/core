@@ -106,7 +106,7 @@ class TestBrowserNavigate:
         await kernel.dispatch("browser launch")
         await kernel.dispatch("browser navigate --url https://example.com --timeout 15000")
         await asyncio.sleep(0.3)
-        history = await kernel.event_bus.history(EventFilter(event_types=["browser.navigated"]))
+        history = await kernel.event_bus.history(EventFilter(event_types=("browser.navigated",)))
         assert len(history) >= 1
         assert any("example.com" in str(e.payload) for e in history)
 

@@ -118,7 +118,7 @@ class TestBootSequence:
     async def test_boot_emits_kernel_started(self, raw_kernel: Kernel) -> None:
         await raw_kernel.boot()
         # Check event history for KERNEL_STARTED
-        history = await raw_kernel.event_bus.history(EventFilter(event_types=[KERNEL_STARTED]))
+        history = await raw_kernel.event_bus.history(EventFilter(event_types=(KERNEL_STARTED,)))
         assert len(history) >= 1
         assert history[0].type == KERNEL_STARTED
         await raw_kernel.shutdown()
@@ -327,7 +327,7 @@ class TestDispatch:
             await asyncio.sleep(0.5)
 
             history = await kernel.event_bus.history(
-                EventFilter(event_types=["test.ask.completed"])
+                EventFilter(event_types=("test.ask.completed",))
             )
             assert len(history) >= 1
             assert history[0].payload.get("name") == "Alice"

@@ -717,7 +717,6 @@ class TestEvaluateJavaScript:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.skip(reason="browser2 daemon has event bus issue with Subscription hash")
 class TestBrowser2Adapter:
     """Test browser2 daemon adapter with fake web server."""
 

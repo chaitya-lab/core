@@ -81,7 +81,7 @@ async def watch_handler(
     args = ctx.args
     s = store.get_store()
 
-    event_types = [args.get("on")] if args.get("on") else None
+    event_types = (args.get("on"),) if args.get("on") else None
     session_id = args.get("session") or args.get("name")
     limit = int(args.get("limit", 100))
     exit_after = int(args.get("exit_after", args.get("exit-after", 0)))

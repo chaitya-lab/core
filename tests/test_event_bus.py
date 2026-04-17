@@ -117,7 +117,7 @@ class TestEmit:
 class TestSubscriptions:
     async def test_subscribe_receives_matching_events(self, bus: SqliteEventBus) -> None:
         received: list[Event] = []
-        ef = EventFilter(event_types=["test_event"])
+        ef = EventFilter(event_types=("test_event",))
         await bus.subscribe(ef, received.append)
 
         await bus.emit(Event(type="test_event"))
@@ -205,7 +205,7 @@ class TestHistory:
         await bus.emit(Event(type="beta"))
         await bus.emit(Event(type="alpha"))
 
-        events = await bus.history(EventFilter(event_types=["alpha"]))
+        events = await bus.history(EventFilter(event_types=("alpha",)))
         assert len(events) == 2
 
     async def test_history_filter_by_session(self, bus: SqliteEventBus) -> None:

@@ -128,7 +128,7 @@ class TestEventFilter:
         assert f.limit is None
 
     def test_filter_with_types(self) -> None:
-        f = EventFilter(event_types=["kernel_started", "adapter_loaded"])
+        f = EventFilter(event_types=("kernel_started", "adapter_loaded"))
         assert len(f.event_types) == 2
 
 
@@ -163,10 +163,12 @@ class TestCommandChain:
     def test_chain_with_steps(self) -> None:
         cmd1 = PipelineCommand(adapter="file", subcommand="cat")
         cmd2 = PipelineCommand(adapter="output", subcommand="filter")
-        chain = CommandChain(steps=[
-            (cmd1, PipelineOperator.PIPE),
-            (cmd2, None),
-        ])
+        chain = CommandChain(
+            steps=[
+                (cmd1, PipelineOperator.PIPE),
+                (cmd2, None),
+            ]
+        )
         assert len(chain.steps) == 2
         assert chain.steps[0][1] == PipelineOperator.PIPE
         assert chain.steps[1][1] is None

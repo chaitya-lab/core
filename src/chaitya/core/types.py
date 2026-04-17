@@ -146,7 +146,7 @@ class Event:
 class EventFilter:
     """Filter criteria for event queries and subscriptions."""
 
-    event_types: list[str] | None = None
+    event_types: tuple[str, ...] | None = None
     source_adapter: str | None = None
     session_id: str | None = None
     since: datetime | None = None
