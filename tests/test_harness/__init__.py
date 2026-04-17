@@ -1,10 +1,11 @@
 """Test harness for fake terminal apps and core adapter testing."""
 
 from tests.test_harness.fake_terminals import (
-    FakeClaudeCode,
-    FakeCodex,
+    FakeAPICLI,
     FakeGenericTerminal,
-    FakeOpenCode,
+    FakeMarkdownCLI,
+    FakeREPL,
+    FakeShell,
     FakeTerminalApp,
     MultiTerminalTestHarness,
     TerminalEvent,
@@ -13,9 +14,10 @@ from tests.test_harness.fake_terminals import (
 
 __all__ = [
     "FakeTerminalApp",
-    "FakeClaudeCode",
-    "FakeCodex",
-    "FakeOpenCode",
+    "FakeREPL",
+    "FakeMarkdownCLI",
+    "FakeAPICLI",
+    "FakeShell",
     "FakeGenericTerminal",
     "MultiTerminalTestHarness",
     "TerminalEvent",

@@ -1,8 +1,8 @@
-"""Fake Terminal Apps - Simulate different CLI TUI patterns.
+"""Fake Terminal Apps - Simulate different CLI/TUI patterns.
 
-This module provides fake terminal apps that simulate various CLI patterns
-(Codex, OpenCode, Claude Code, etc.) for testing the core adapters and session
-management. Each fake app has different TUI patterns and interaction styles.
+This module provides fake terminal apps for testing the core adapters and
+session management. Each fake app simulates different interaction styles
+(markdown CLI, REPL, API-style, etc.) without referencing specific products.
 """
 
 from __future__ import annotations
@@ -11,7 +11,7 @@ import asyncio
 import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any, AsyncIterator
+from typing import Any
 
 
 @dataclass
@@ -67,30 +67,22 @@ class FakeTerminalApp(ABC):
         self.events.append(TerminalEvent(type=event_type, payload=payload, timestamp=time.time()))
 
 
-class FakeClaudeCode(FakeTerminalApp):
-    """Simulates Claude Code's TUI patterns.
+class FakeREPL(FakeTerminalApp):
+    """Simulates a REPL-style terminal with ANSI colors and prompts.
 
-    Claude Code patterns:
-    - ANSI color codes for syntax highlighting
-    - Progress indicators with spinning chars
-    - Thinking blocks with <thinking> tags
-    - Confirmation prompts with [y/n] choices
-    - Error messages with red text
+    Pattern: ANSI-colored output, command prefixes, thinking blocks.
     """
 
     THINKING_PATTERN = re.compile(r"<thinking>(.*?)</thinking>", re.DOTALL)
-    CONFIRM_PATTERN = re.compile(r"\[(Yes|No|y/n)\] \(([^)]+)\):?\s*$")
     ERROR_PATTERN = re.compile(r"\x1b\[31m(.*?)\x1b\[0m")
-    PROGRESS_PATTERN = re.compile(r"[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]")
 
-    def __init__(self, session_name: str = "claude-code"):
-        super().__init__("Claude Code", session_name)
-        self._task_queue: asyncio.Queue[str] = asyncio.Queue()
+    def __init__(self, session_name: str = "repl"):
+        super().__init__("REPL", session_name)
         self._running = False
 
     async def start(self) -> None:
         self._running = True
-        self._buffer = f"\x1b[1m\x1b[36mthropic/claude-code\x1b[0m\n"
+        self._buffer = f"\x1b[1m\x1b[36mrepl/terminal\x1b[0m\n"
         self._buffer += f"\x1b[90mSession: {self.session_name}\x1b[0m\n\n"
         self.add_event("session_started", {"session": self.session_name})
 
@@ -106,12 +98,6 @@ class FakeClaudeCode(FakeTerminalApp):
             thinking = text.replace("think:", "").strip()
             output += f"<thinking>\n{thinking}\n</thinking>\n"
             events.append(TerminalEvent("thinking_completed", {"thinking": thinking}))
-
-        # Check for confirmations
-        confirm_match = self.CONFIRM_PATTERN.search(text)
-        if confirm_match:
-            output += f"\x1b[90mAuto-confirming: {confirm_match.group(2)}\x1b[0m\n"
-            events.append(TerminalEvent("confirmed", {"response": "y"}))
 
         # Simulate command execution
         if text.startswith("!"):
@@ -141,28 +127,94 @@ class FakeClaudeCode(FakeTerminalApp):
         return TerminalResponse(output=output, exit_code=0, events=events)
 
     async def read_output(self, timeout: float = 0.5) -> str:
-        await asyncio.sleep(0.01)  # Simulate small delay
+        await asyncio.sleep(0.01)
         output = self._buffer
         self._buffer = ""
         return output
 
 
-class FakeCodex(FakeTerminalApp):
-    """Simulates OpenAI Codex CLI patterns.
+class FakeMarkdownCLI(FakeTerminalApp):
+    """Simulates a markdown-based CLI with formatted output.
 
-    Codex patterns:
-    - Simple prompts without ANSI
-    - HTTP API style responses
-    - JSON-like output
-    - Status indicators
+    Pattern: Markdown headers, code blocks, status indicators.
     """
 
-    def __init__(self, session_name: str = "codex"):
-        super().__init__("Codex", session_name)
+    SPINNERS = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+    STATUS_BADGES = {
+        "success": "✅",
+        "error": "❌",
+        "warning": "⚠️",
+        "info": "ℹ️",
+    }
+
+    def __init__(self, session_name: str = "markdown"):
+        super().__init__("MarkdownCLI", session_name)
+        self._spinner_index = 0
+
+    async def start(self) -> None:
+        self._buffer = "# Terminal\n"
+        self._buffer += f"Session: `{self.session_name}`\n\n"
+        self.add_event("session_started", {"session": self.session_name})
+
+    async def send(self, text: str) -> TerminalResponse:
+        if not text.strip():
+            return TerminalResponse(output=self._buffer, exit_code=0)
+
+        output = ""
+        events = []
+
+        # Markdown code blocks
+        if text.startswith("```"):
+            output += "```\nSimulated code output\n```\n"
+            events.append(TerminalEvent("code_block", {}))
+
+        # Task execution with spinner
+        elif text.startswith("task:"):
+            task = text[5:].strip()
+            output += f"**Task:** {task}\n\n"
+            for i in range(3):
+                spinner = self.SPINNERS[self._spinner_index % len(self.SPINNERS)]
+                output += f"\r{spinner} Running..."
+                self._spinner_index += 1
+                await asyncio.sleep(0.01)
+            output += f"\r{self.STATUS_BADGES['success']} Done!\n"
+            events.append(TerminalEvent("task_completed", {"task": task}))
+
+        # Status checks
+        elif text.startswith("status"):
+            output += f"| Component | Status |\n"
+            output += f"|-----------|--------|\n"
+            output += f"| Session | {self.STATUS_BADGES['success']} Active |\n"
+            output += f"| API | {self.STATUS_BADGES['success']} Connected |\n"
+
+        else:
+            output += f"**You:** {text}\n\n"
+            output += "**Response:** Simulated response\n"
+
+        self._buffer = output
+        for event in events:
+            self.add_event(event.type, event.payload)
+
+        return TerminalResponse(output=output, exit_code=0, events=events)
+
+    async def read_output(self, timeout: float = 0.5) -> str:
+        output = self._buffer
+        self._buffer = ""
+        return output
+
+
+class FakeAPICLI(FakeTerminalApp):
+    """Simulates an API-style CLI with structured output.
+
+    Pattern: Bracketed labels, structured responses, API call tracking.
+    """
+
+    def __init__(self, session_name: str = "api"):
+        super().__init__("APICLI", session_name)
         self._api_calls: list[dict[str, Any]] = []
 
     async def start(self) -> None:
-        self._buffer = f"[Codex v1.0] Session: {self.session_name}\n"
+        self._buffer = f"[CLI v1.0] Session: {self.session_name}\n"
         self._buffer += "Type 'help' for commands.\n\n"
         self.add_event("session_started", {"session": self.session_name})
 
@@ -175,7 +227,7 @@ class FakeCodex(FakeTerminalApp):
 
         # Help command
         if text.strip().lower() == "help":
-            output += "[Codex Commands]\n"
+            output += "[CLI Commands]\n"
             output += "  /complete <prompt>  - Generate completion\n"
             output += "  /edit <file>        - Edit file\n"
             output += "  /explain <code>     - Explain code\n"
@@ -211,73 +263,28 @@ class FakeCodex(FakeTerminalApp):
         return output
 
 
-class FakeOpenCode(FakeTerminalApp):
-    """Simulates OpenCode CLI patterns.
+class FakeShell(FakeTerminalApp):
+    """Simulates a simple shell with basic command output.
 
-    OpenCode patterns:
-    - Markdown formatted output
-    - Block code with ```
-    - Status badges
-    - Progress spinners
+    Pattern: Plain text, simple prompts, command output.
     """
 
-    SPINNERS = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
-    STATUS_BADGES = {
-        "success": "✅",
-        "error": "❌",
-        "warning": "⚠️",
-        "info": "ℹ️",
-    }
-
-    def __init__(self, session_name: str = "opencode"):
-        super().__init__("OpenCode", session_name)
-        self._spinner_index = 0
+    def __init__(self, session_name: str = "shell"):
+        super().__init__("Shell", session_name)
 
     async def start(self) -> None:
-        self._buffer = "# OpenCode\n"
-        self._buffer += f"Session: `{self.session_name}`\n\n"
+        self._buffer = f"[Shell] Session: {self.session_name}\n"
         self.add_event("session_started", {"session": self.session_name})
 
     async def send(self, text: str) -> TerminalResponse:
         if not text.strip():
             return TerminalResponse(output=self._buffer, exit_code=0)
 
-        output = ""
-        events = []
-
-        # Markdown code blocks
-        if text.startswith("```"):
-            output += "```\nSimulated code output\n```\n"
-            events.append(TerminalEvent("code_block", {}))
-
-        # Task execution
-        elif text.startswith("task:"):
-            task = text[5:].strip()
-            output += f"**Task:** {task}\n\n"
-            for i in range(3):
-                spinner = self.SPINNERS[self._spinner_index % len(self.SPINNERS)]
-                output += f"\r{spinner} Running..."
-                self._spinner_index += 1
-                await asyncio.sleep(0.01)
-            output += f"\r{self.STATUS_BADGES['success']} Done!\n"
-            events.append(TerminalEvent("task_completed", {"task": task}))
-
-        # Status checks
-        elif text.startswith("status"):
-            output += f"| Component | Status |\n"
-            output += f"|-----------|--------|\n"
-            output += f"| Session | {self.STATUS_BADGES['success']} Active |\n"
-            output += f"| API | {self.STATUS_BADGES['success']} Connected |\n"
-
-        else:
-            output += f"**You:** {text}\n\n"
-            output += "**OpenCode:** Simulated response\n"
-
+        output = f"[{self.session_name}] {text}\n"
+        output += "Response: Simulated\n"
         self._buffer = output
-        for event in events:
-            self.add_event(event.type, event.payload)
 
-        return TerminalResponse(output=output, exit_code=0, events=events)
+        return TerminalResponse(output=output, exit_code=0)
 
     async def read_output(self, timeout: float = 0.5) -> str:
         output = self._buffer
@@ -286,9 +293,9 @@ class FakeOpenCode(FakeTerminalApp):
 
 
 class FakeGenericTerminal(FakeTerminalApp):
-    """A generic terminal that can simulate various patterns.
+    """A generic terminal that supports custom handlers.
 
-    Useful for testing edge cases and generic scenarios.
+    Useful for testing edge cases and custom scenarios.
     """
 
     def __init__(self, session_name: str = "generic"):
@@ -345,9 +352,10 @@ class MultiTerminalTestHarness:
     async def create_terminal(self, terminal_type: str, session_name: str) -> FakeTerminalApp:
         """Create and register a terminal session."""
         terminal_map = {
-            "claude": FakeClaudeCode(session_name),
-            "codex": FakeCodex(session_name),
-            "opencode": FakeOpenCode(session_name),
+            "repl": FakeREPL(session_name),
+            "markdown": FakeMarkdownCLI(session_name),
+            "api": FakeAPICLI(session_name),
+            "shell": FakeShell(session_name),
             "generic": FakeGenericTerminal(session_name),
         }
 
