@@ -45,6 +45,9 @@ class MinimalSessionBackend:
     async def attach(self, name: str) -> None:
         pass
 
+    async def view(self, name: str) -> str:
+        return ""
+
     async def detach(self, name: str) -> None:
         pass
 
@@ -148,9 +151,7 @@ class MinimalAdapterLoader:
     async def load(self, package: AdapterPackage) -> AdapterContract:
         return AdapterContract()
 
-    def build_dependency_graph(
-        self, packages: list[AdapterPackage]
-    ) -> DependencyGraph:
+    def build_dependency_graph(self, packages: list[AdapterPackage]) -> DependencyGraph:
         return DependencyGraph()
 
 
@@ -189,16 +190,19 @@ class TestProtocolNonConformance:
     def test_empty_class_not_session_backend(self) -> None:
         class Empty:
             pass
+
         assert not isinstance(Empty(), SessionBackend)
 
     def test_empty_class_not_event_bus(self) -> None:
         class Empty:
             pass
+
         assert not isinstance(Empty(), EventBusProtocol)
 
     def test_empty_class_not_store(self) -> None:
         class Empty:
             pass
+
         assert not isinstance(Empty(), StoreProtocol)
 
 

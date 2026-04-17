@@ -119,7 +119,7 @@ class TestSessionInteractivity:
         if os.name == "nt":
             # Multi-word PowerShell command
             await kernel.dispatch(
-                'session send-input multi-test Get-ChildItem -Path . -Name --newline'
+                "session send-input multi-test Get-ChildItem -Path . -Name --newline"
             )
         else:
             await kernel.dispatch('session send-input multi-test "ls -la" --newline')
@@ -153,7 +153,7 @@ class TestWatchEvents:
         await kernel.dispatch("session create event-test")
 
         # Emit a test event
-        r = await kernel.dispatch("test emit --name test-event --payload '{\"key\":\"value\"}'")
+        r = await kernel.dispatch('test emit --name test-event --payload \'{"key":"value"}\'')
         assert r.exit_code == 0
 
         # Watch for it
@@ -213,7 +213,9 @@ class TestCrossSessionCoordination:
             )
             await kernel.dispatch("session send-input writer Enter --newline")
         else:
-            await kernel.dispatch('session send-input writer "echo Hello from session A > test_file.txt" --newline')
+            await kernel.dispatch(
+                'session send-input writer "echo Hello from session A > test_file.txt" --newline'
+            )
 
         await asyncio.sleep(0.5)
 
@@ -236,7 +238,7 @@ class TestCrossSessionCoordination:
         await kernel.dispatch("session create env-test")
 
         # Set an env var
-        r = await kernel.dispatch("session set-env env-test GREETING=Hello")
+        r = await kernel.dispatch("session set-env env-test --key GREETING --value Hello")
         assert r.exit_code == 0
 
         # Send command that uses it

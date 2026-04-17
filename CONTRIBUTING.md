@@ -100,6 +100,19 @@ The test harness provides fake terminal apps for testing core adapters:
 - `FakeShell` - Simple shell output
 - `FakeGenericTerminal` - Custom handler support
 
+Run fake web tests (browser automation):
+
+```bash
+pytest tests/test_web -v
+```
+
+The fake web test suite provides a local web server (port 18766) for testing browser adapters without external dependencies:
+
+- `test_web_server.py` - FastAPI server with multiple test pages (home, search, dashboard, chat, login, etc.)
+- Console capture - tracks console.log, console.warn, console.error from browser
+- DOM event tracking - captures clicks, inputs, form submissions
+- Useful for testing browser adapter commands: navigate, click, fill, evaluate, screenshot
+
 Run session backend integration tests when changing session behavior:
 
 macOS/Linux:
