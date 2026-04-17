@@ -44,6 +44,8 @@ _page: Any = None
 _context: Any = None
 _headed = False
 _browser_id: str = ""
+_console_logs: list[dict] = []
+_console_listener: Any = None
 
 
 # ---------------------------------------------------------------------------
@@ -350,6 +352,35 @@ _browser_contract = {
                 'chaitya browser check --selector "#agree-terms"',
             ],
         },
+        {
+            "name": "console",
+            "description": "Get captured console logs from the current page.",
+            "params": [
+                {
+                    "name": "clear",
+                    "required": False,
+                    "description": "Clear console logs after reading. Default: false",
+                },
+            ],
+            "examples": [
+                "chaitya browser console",
+                "chaitya browser console --clear",
+            ],
+        },
+        {
+            "name": "wait",
+            "description": "Wait for a specified time (useful for testing).",
+            "params": [
+                {
+                    "name": "seconds",
+                    "required": False,
+                    "description": "Number of seconds to wait. Default: 1",
+                },
+            ],
+            "examples": [
+                "chaitya browser wait --seconds 2",
+            ],
+        },
     ],
     "permissions": {
         "fs_read": ["."],
@@ -366,7 +397,7 @@ _browser_contract = {
 
 
 async def _ensure_browser(headed: bool = False, viewport: tuple[int, int] | None = None) -> Any:
-    global _browser, _page, _context, _headed, _browser_id
+    global _browser, _page, _context, _headed, _browser_id, _console_logs, _console_listener
     vp = viewport or (1280, 800)
 
     if _browser is not None and _browser_id:
@@ -387,6 +418,24 @@ async def _ensure_browser(headed: bool = False, viewport: tuple[int, int] | None
         ),
     )
     page = await context.new_page()
+
+    _console_logs = []
+
+    def handle_console(msg: Any) -> None:
+        _console_logs.append(
+            {
+                "type": msg.type,
+                "text": msg.text,
+                "location": {
+                    "url": msg.location.get("url", ""),
+                    "line": msg.location.get("lineNumber", 0),
+                    "column": msg.location.get("columnNumber", 0),
+                },
+                "timestamp": time.time(),
+            }
+        )
+
+    _console_listener = page.on("console", handle_console)
 
     _browser = browser
     _context = context
@@ -458,6 +507,10 @@ async def browser_handler(
         return await _handle_select(ctx)
     if sub == "check":
         return await _handle_check(ctx)
+    if sub == "console":
+        return await _handle_console(ctx)
+    if sub == "wait":
+        return await _handle_wait(ctx)
 
     return f"Unknown browser command: {sub}\n".encode("utf-8"), 1
 
@@ -550,13 +603,16 @@ async def _handle_navigate(ctx: SessionContext) -> tuple[bytes, int]:
 
 async def _handle_click(ctx: SessionContext) -> tuple[bytes, int]:
     selector = str(ctx.args.get("selector") or "")
-    if not selector:
-        return b"click: --selector is required\n", 1
+    button_type = str(ctx.args.get("type") or "")
+    if not selector and not button_type:
+        return b"click: --selector or --type is required\n", 1
 
     page = _get_page()
     timeout_ms = float(ctx.args.get("timeout") or 5000)
 
     try:
+        if button_type:
+            selector = f"button[type={button_type}], input[type={button_type}]"
         await page.click(selector, timeout=timeout_ms)
         return f"Clicked: {selector}\n".encode("utf-8"), 0
     except Exception as exc:
@@ -813,7 +869,14 @@ async def _handle_close(ctx: SessionContext) -> tuple[bytes, int]:
 
 
 async def _cleanup_browser() -> None:
-    global _browser, _page, _context, _browser_id, _headed
+    global _browser, _page, _context, _browser_id, _headed, _console_listener, _console_logs
+    if _console_listener and _page:
+        try:
+            _console_listener()
+        except Exception:
+            pass
+    _console_listener = None
+    _console_logs = []
     if _browser:
         try:
             await _browser.close()
@@ -907,6 +970,45 @@ async def _handle_check(ctx: SessionContext) -> tuple[bytes, int]:
         return f"Element '{selector}' {state}.\n".encode("utf-8"), 0
     except Exception as exc:
         return f"check failed: {exc}\n".encode("utf-8"), 1
+
+
+# ---------------------------------------------------------------------------
+# console
+# ---------------------------------------------------------------------------
+
+
+async def _handle_console(ctx: SessionContext) -> tuple[bytes, int]:
+    global _console_logs
+    clear = str(ctx.args.get("clear") or "false").lower() in ("true", "1", "yes")
+
+    if not _console_logs:
+        return b"No console logs captured.\n", 0
+
+    output_lines = []
+    for log in _console_logs:
+        msg_type = log.get("type", "log")
+        text = log.get("text", "")
+        location = log.get("location", {})
+        line = location.get("line", 0)
+        output_lines.append(f"[{msg_type.upper()}] {text} (line {line})")
+
+    result = "\n".join(output_lines) + "\n"
+
+    if clear:
+        _console_logs = []
+
+    return result.encode("utf-8"), 0
+
+
+# ---------------------------------------------------------------------------
+# wait
+# ---------------------------------------------------------------------------
+
+
+async def _handle_wait(ctx: SessionContext) -> tuple[bytes, int]:
+    seconds = float(ctx.args.get("seconds") or 1)
+    await asyncio.sleep(seconds)
+    return f"Waited {seconds} second(s).\n".encode("utf-8"), 0
 
 
 # ---------------------------------------------------------------------------

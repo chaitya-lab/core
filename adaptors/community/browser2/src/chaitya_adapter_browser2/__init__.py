@@ -198,6 +198,35 @@ _browser_contract = {
             "params": [],
             "examples": ["chaitya browser2 close"],
         },
+        {
+            "name": "console",
+            "description": "Get captured console logs from the current page.",
+            "params": [
+                {
+                    "name": "clear",
+                    "required": False,
+                    "description": "Clear console logs after reading. Default: false",
+                },
+            ],
+            "examples": [
+                "chaitya browser2 console",
+                "chaitya browser2 console --clear",
+            ],
+        },
+        {
+            "name": "wait",
+            "description": "Wait for a specified time (useful for testing).",
+            "params": [
+                {
+                    "name": "seconds",
+                    "required": False,
+                    "description": "Number of seconds to wait. Default: 1",
+                },
+            ],
+            "examples": [
+                "chaitya browser2 wait --seconds 2",
+            ],
+        },
     ],
     "permissions": {
         "fs_read": ["."],
@@ -262,6 +291,16 @@ async def _request_daemon(event_type: str, payload: dict, response_type: str) ->
 
         if event_type == "browser2.close_requested":
             return f"Browser closed.\n".encode(), 0
+
+        if event_type == "browser2.console_requested":
+            logs = result.get("logs", [])
+            if not logs:
+                return "No console logs captured.\n".encode(), 0
+            return "\n".join(logs).encode() + b"\n", 0
+
+        if event_type == "browser2.wait_requested":
+            waited = result.get("waited", 0)
+            return f"Waited {waited} second(s).\n".encode(), 0
 
         return json.dumps(result, default=str).encode() + b"\n", 0
 
@@ -375,6 +414,24 @@ async def browser2_handler(
 
     if sub == "close":
         return await _request_daemon("browser2.close_requested", {}, "browser2.close_response")
+
+    if sub == "console":
+        return await _request_daemon(
+            "browser2.console_requested",
+            {
+                "clear": str(ctx.args.get("clear", "false")).lower() in ("true", "1", "yes"),
+            },
+            "browser2.console_response",
+        )
+
+    if sub == "wait":
+        return await _request_daemon(
+            "browser2.wait_requested",
+            {
+                "seconds": float(ctx.args.get("seconds") or 1),
+            },
+            "browser2.wait_response",
+        )
 
     return f"Unknown browser2 command: {sub}\n".encode(), 1
 

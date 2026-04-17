@@ -18,6 +18,7 @@ import base64
 import json
 import signal
 import sys
+import time
 from typing import Any
 
 from chaitya_sdk import event_bus
@@ -31,6 +32,8 @@ HEADLESS = False
 VIEWPORT = (1280, 800)
 DAEMON_ID = ""
 SHUTTING_DOWN = False
+CONSOLE_LOGS: list[dict] = []
+CONSOLE_LISTENER: Any = None
 
 
 async def _emit_response(
@@ -48,7 +51,16 @@ async def _emit_response(
 
 
 async def _handle_launch(event: Event) -> None:
-    global BROWSER, PAGE, CONTEXT, PLAYWRIGHT, HEADLESS, VIEWPORT, DAEMON_ID
+    global \
+        BROWSER, \
+        PAGE, \
+        CONTEXT, \
+        PLAYWRIGHT, \
+        HEADLESS, \
+        VIEWPORT, \
+        DAEMON_ID, \
+        CONSOLE_LOGS, \
+        CONSOLE_LISTENER
 
     request_id = event.request_id
     payload = event.payload or {}
@@ -61,10 +73,18 @@ async def _handle_launch(event: Event) -> None:
     HEADLESS = headless
     VIEWPORT = (width, height)
     DAEMON_ID = daemon_id
+    CONSOLE_LOGS = []
 
     try:
         if BROWSER is not None:
             await BROWSER.close()
+
+        if CONSOLE_LISTENER and PAGE:
+            try:
+                CONSOLE_LISTENER()
+            except Exception:
+                pass
+        CONSOLE_LISTENER = None
 
         PLAYWRIGHT = None
         from playwright.async_api import async_playwright
@@ -82,6 +102,22 @@ async def _handle_launch(event: Event) -> None:
             ),
         )
         PAGE = await CONTEXT.new_page()
+
+        def handle_console(msg: Any) -> None:
+            CONSOLE_LOGS.append(
+                {
+                    "type": msg.type,
+                    "text": msg.text,
+                    "location": {
+                        "url": msg.location.get("url", ""),
+                        "line": msg.location.get("lineNumber", 0),
+                        "column": msg.location.get("columnNumber", 0),
+                    },
+                    "timestamp": time.time(),
+                }
+            )
+
+        CONSOLE_LISTENER = PAGE.on("console", handle_console)
 
         await _emit_response(
             "browser2.launch_response",
@@ -357,9 +393,17 @@ async def _handle_url(event: Event) -> None:
 
 
 async def _handle_close(event: Event) -> None:
-    global BROWSER, PAGE, CONTEXT, PLAYWRIGHT
+    global BROWSER, PAGE, CONTEXT, PLAYWRIGHT, CONSOLE_LISTENER, CONSOLE_LOGS
 
     request_id = event.request_id
+
+    if CONSOLE_LISTENER and PAGE:
+        try:
+            CONSOLE_LISTENER()
+        except Exception:
+            pass
+    CONSOLE_LISTENER = None
+    CONSOLE_LOGS = []
 
     if BROWSER is not None:
         await BROWSER.close()
@@ -369,6 +413,43 @@ async def _handle_close(event: Event) -> None:
     PLAYWRIGHT = None
 
     await _emit_response("browser2.close_response", request_id, {"closed": True})
+
+
+async def _handle_console(event: Event) -> None:
+    global CONSOLE_LOGS
+
+    request_id = event.request_id
+    payload = event.payload or {}
+    clear = payload.get("clear", False)
+
+    if not CONSOLE_LOGS:
+        await _emit_response("browser2.console_response", request_id, {"logs": []})
+    else:
+        logs_formatted = []
+        for log in CONSOLE_LOGS:
+            msg_type = log.get("type", "log")
+            text = log.get("text", "")
+            location = log.get("location", {})
+            line = location.get("line", 0)
+            logs_formatted.append(f"[{msg_type.upper()}] {text} (line {line})")
+
+        await _emit_response(
+            "browser2.console_response",
+            request_id,
+            {"logs": logs_formatted, "raw_logs": CONSOLE_LOGS},
+        )
+
+    if clear:
+        CONSOLE_LOGS = []
+
+
+async def _handle_wait(event: Event) -> None:
+    request_id = event.request_id
+    payload = event.payload or {}
+    seconds = payload.get("seconds", 1)
+
+    await asyncio.sleep(float(seconds))
+    await _emit_response("browser2.wait_response", request_id, {"waited": seconds})
 
 
 async def _request_handler(event: Event) -> None:
@@ -394,6 +475,10 @@ async def _request_handler(event: Event) -> None:
         await _handle_url(event)
     elif event.type == "browser2.close_requested":
         await _handle_close(event)
+    elif event.type == "browser2.console_requested":
+        await _handle_console(event)
+    elif event.type == "browser2.wait_requested":
+        await _handle_wait(event)
 
 
 async def _heartbeat() -> None:
@@ -423,6 +508,8 @@ async def main() -> None:
             "browser2.title_requested",
             "browser2.url_requested",
             "browser2.close_requested",
+            "browser2.console_requested",
+            "browser2.wait_requested",
         ],
     )
 
