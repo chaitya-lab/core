@@ -503,7 +503,7 @@ class _AdapterEventBusBridge:
             handler,
         )
         self._subscriptions[subscription.subscription_id] = subscription
-        return subscription
+        return subscription.subscription_id
 
     async def unsubscribe(self, subscription_id: str) -> None:
         subscription = self._subscriptions.pop(subscription_id, None)

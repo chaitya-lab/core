@@ -166,7 +166,60 @@ class EventBusProxy:
 
         sub = await bus.subscribe(handler, event_types=event_types, session_id=None)
         try:
-            await asyncio.wait_for(done.wait(), timeout=timeout)
+            import time
+            from chaitya.core.types import Event as CoreEvent
+            import json
+
+            last_check = time.time()
+            poll_interval = 0.1
+
+            while time.time() - last_check < timeout:
+                if result[0] is not None:
+                    return result[0]
+
+                await asyncio.sleep(poll_interval)
+
+                sqlite_bus = getattr(bus, "_event_bus", None)
+                if sqlite_bus is not None and hasattr(sqlite_bus, "_db"):
+                    db = sqlite_bus._db
+                    if db is not None:
+                        event_types_str = ",".join(f"'{et}'" for et in event_types)
+                        query = f"SELECT * FROM events WHERE type IN ({event_types_str}) AND request_id = ? ORDER BY timestamp ASC LIMIT 1"
+                        try:
+                            async with db.execute(query, (request_id,)) as cursor:
+                                rows = await cursor.fetchall()
+                            if rows:
+                                row = rows[0]
+                                (
+                                    event_id,
+                                    event_type,
+                                    source_adapter,
+                                    timestamp,
+                                    session_id,
+                                    exit_code,
+                                    duration_ms,
+                                    payload_json,
+                                    parent_event_id,
+                                    req_id,
+                                ) = row
+                                result[0] = CoreEvent(
+                                    event_id=event_id,
+                                    type=event_type,
+                                    source_adapter=source_adapter,
+                                    timestamp=timestamp,
+                                    session_id=session_id,
+                                    exit_code=exit_code,
+                                    duration_ms=duration_ms,
+                                    payload=json.loads(payload_json) if payload_json else {},
+                                    parent_event_id=parent_event_id,
+                                    request_id=req_id,
+                                )
+                                return result[0]
+                        except Exception:
+                            pass
+
+                last_check = time.time()
+
             if result[0] is None:
                 raise TimeoutError(f"Timed out waiting for response to {request_id}")
             return result[0]
