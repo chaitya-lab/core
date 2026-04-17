@@ -38,6 +38,7 @@ adaptors/core/             System adapters
 adaptors/community/        Optional first-party and community adapters
 docs/                      User and architecture docs
 tests/                     Test suite
+tests/test_harness/        Fake terminal apps for testing
 ```
 
 ## Working Rules
@@ -85,6 +86,19 @@ Run the main suite:
 ```bash
 pytest tests -q
 ```
+
+Run test harness (fake terminal apps):
+
+```bash
+pytest tests/test_harness -v
+```
+
+The test harness provides fake terminal apps for testing core adapters:
+- `FakeREPL` - ANSI colors, prompts, thinking blocks
+- `FakeAPICLI` - Structured output, API-style commands
+- `FakeMarkdownCLI` - Markdown formatting, badges, spinners
+- `FakeShell` - Simple shell output
+- `FakeGenericTerminal` - Custom handler support
 
 Run session backend integration tests when changing session behavior:
 
