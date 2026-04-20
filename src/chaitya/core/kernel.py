@@ -548,20 +548,12 @@ class Kernel:
         input_timeout_seconds: int = 300,
         event_bus: EventBusProtocol | None = None,
     ) -> None:
-        # Build a default config if none provided (for programmatic use)
+        # Use config from parameters or load from file
         if config is None:
-            config = CoreConfig(
-                kernel=KernelConfig(cli_name=cli_name),
-                session=SessionConfig(
-                    backend=session_backend, stuck_threshold_seconds=stuck_threshold_seconds
-                ),
-                adapter_search_paths=adapter_search_paths or [],
-                enabled_adapters=enabled_adapters or [],
-                disabled_adapters=disabled_adapters or [],
-            )
+            config = load_config()  # Auto-load from ~/.chaitya/core.yaml
         self._config = config
         self.cli_name = cli_name
-        self._system_adapters = system_adapters or DEFAULT_SYSTEM_ADAPTERS
+        self._system_adapters = system_adapters or frozenset(config.system_adapters)
         self._booted = False
         self._shutting_down = False
         self._boot_time: float | None = None
@@ -592,10 +584,16 @@ class Kernel:
             templates_dir=templates_dir,
         )
         self._pipeline = PipelineOrchestrator(overflow_dir=overflow_dir)
+
+        # Always include system adapters in enabled list, plus any config-specified ones
+        enabled = set(config.system_adapters)
+        if config.enabled_adapters:
+            enabled.update(config.enabled_adapters)
+
         self._registry = AdapterRegistry(
-            search_paths=adapter_search_paths or [],
-            enabled_adapters=enabled_adapters or [],
-            disabled_adapters=disabled_adapters or [],
+            search_paths=adapter_search_paths or config.adapter_search_paths,
+            enabled_adapters=list(enabled),
+            disabled_adapters=disabled_adapters or config.disabled_adapters,
         )
         self._pipeline._registry = self._registry  # type: ignore[attr-defined]
 
