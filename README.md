@@ -223,6 +223,26 @@ adapter_options:
     viewport_width: 1920
 ```
 
+### Adapter Versioning
+
+Adapters can declare the minimum core version they require:
+
+```yaml
+# In adapter's module.json or @adapter decorator
+requires_core: ">=0.1.0"
+```
+
+Supported version specs:
+
+| Spec | Meaning |
+|------|---------|
+| `>=0.1.0` | Minimum version 0.1.0 |
+| `^0.1.0` | Compatible (same major version) |
+| `~0.1.0` | Compatible (same minor version) |
+| `0.1.0` | Exact version |
+
+If an adapter requires a newer core version than what's installed, the kernel rejects it with a clear error.
+
 ### Programmatic Use
 
 Use Chaitya Core as a library in your Python code:

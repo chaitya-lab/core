@@ -43,18 +43,17 @@ def _build_command_specs(raw: list[dict[str, Any]]) -> list[CommandSpec]:
     """Convert raw dicts from decorator kwargs into CommandSpec objects."""
     specs = []
     for cmd in raw:
-        params = [
-            CommandParam(**p) if isinstance(p, dict) else p
-            for p in cmd.get("params", [])
-        ]
-        specs.append(CommandSpec(
-            name=cmd["name"],
-            description=cmd.get("description", ""),
-            params=params,
-            examples=cmd.get("examples", []),
-            output_type=cmd.get("output_type", "text/plain"),
-            supports_dry_run=cmd.get("supports_dry_run", False),
-        ))
+        params = [CommandParam(**p) if isinstance(p, dict) else p for p in cmd.get("params", [])]
+        specs.append(
+            CommandSpec(
+                name=cmd["name"],
+                description=cmd.get("description", ""),
+                params=params,
+                examples=cmd.get("examples", []),
+                output_type=cmd.get("output_type", "text/plain"),
+                supports_dry_run=cmd.get("supports_dry_run", False),
+            )
+        )
     return specs
 
 
@@ -62,25 +61,24 @@ def _build_permissions(raw: dict[str, Any] | None) -> AdapterPermissions:
     """Convert raw dict into AdapterPermissions."""
     if raw is None:
         return AdapterPermissions()
-    return AdapterPermissions(**{
-        k: v for k, v in raw.items()
-        if k in AdapterPermissions.__dataclass_fields__
-    })
+    return AdapterPermissions(
+        **{k: v for k, v in raw.items() if k in AdapterPermissions.__dataclass_fields__}
+    )
 
 
 def _build_resource_limits(raw: dict[str, Any] | None) -> ResourceLimits:
     if raw is None:
         return ResourceLimits()
-    return ResourceLimits(**{
-        k: v for k, v in raw.items()
-        if k in ResourceLimits.__dataclass_fields__
-    })
+    return ResourceLimits(
+        **{k: v for k, v in raw.items() if k in ResourceLimits.__dataclass_fields__}
+    )
 
 
 def adapter(
     *,
     name: str,
     description: str = "",
+    requires_core: str = "",
     depends_on: list[str] | None = None,
     commands: list[dict[str, Any]] | None = None,
     default_session: str = "default",
@@ -114,6 +112,7 @@ def adapter(
         contract = AdapterContract(
             name=name,
             description=description,
+            requires_core=requires_core,
             depends_on=depends_on or [],
             default_session=default_session,
             default_input_type=default_input_type,
@@ -125,9 +124,7 @@ def adapter(
             on_shutdown=ShutdownPolicy(on_shutdown),
             permissions=_build_permissions(permissions),
             commands=_build_command_specs(commands or []),
-            output_routing=[
-                OutputRoutingRule(**r) for r in (output_routing or [])
-            ],
+            output_routing=[OutputRoutingRule(**r) for r in (output_routing or [])],
             events_emitted=events_emitted or [],
             events_consumed=events_consumed or [],
             resource_limits=_build_resource_limits(resource_limits),
@@ -158,4 +155,3 @@ def adapter(
 def get_registered_adapters() -> dict[str, dict[str, Any]]:
     """Return all adapters registered via ``@adapter`` in this process."""
     return dict(_ADAPTER_REGISTRY)
-

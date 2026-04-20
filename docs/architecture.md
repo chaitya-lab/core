@@ -182,6 +182,20 @@ Adapter code should use the SDK for:
 
 Adapters should not import from `chaitya.core`.
 
+### Adapter Versioning
+
+The kernel checks `requires_core` in the adapter contract at load time. Supported specs:
+
+| Spec | Meaning |
+|------|---------|
+| `>=0.1.0` | Minimum core version |
+| `^0.1.0` | Compatible (same major version) |
+| `~0.1.0` | Compatible (same minor version) |
+| `0.1.0` | Exact version |
+
+If the adapter requires a newer core version, the kernel rejects it with:  
+`Adapter requires core >=0.2.0 but kernel is version 0.1.0a1. Upgrade core or use an older adapter version.`
+
 ## Interaction Models
 
 There are three important interactive patterns.

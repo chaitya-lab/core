@@ -73,6 +73,7 @@ The most important fields are:
 
 - `name`
 - `description`
+- `requires_core` — minimum core version (semver spec)
 - `commands`
 - `permissions`
 - `depends_on`
@@ -80,6 +81,29 @@ The most important fields are:
 - `on_shutdown`
 - `events_emitted`
 - `events_consumed`
+
+### Core Version Requirement
+
+Declare the minimum core version your adapter requires:
+
+```python
+@adapter(
+    name="my-adapter",
+    description="My adapter",
+    requires_core=">=0.1.0",  # Minimum core version
+    commands=[...],
+)
+def my_handler(stream, ctx):
+    ...
+```
+
+Supported specs:
+- `>=0.1.0` — minimum version
+- `^0.1.0` — compatible (same major version)
+- `~0.1.0` — compatible (same minor version)
+- `0.1.0` — exact version
+
+If the installed core version doesn't match, the kernel rejects your adapter with a clear error.
 
 Each command should include:
 
