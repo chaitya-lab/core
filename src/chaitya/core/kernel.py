@@ -28,9 +28,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
-
 from chaitya_sdk.context import (
     _configure_permissions,
     event_bus as sdk_event_bus,
@@ -63,7 +60,7 @@ from chaitya_sdk.types import (
 
 from chaitya.core import __version__
 from chaitya.core.backends.tmux import TmuxSessionBackend
-from chaitya.core.config import CoreConfig, EventBusConfig, KernelConfig, SessionConfig
+from chaitya.core.config import CoreConfig, EventBusConfig, KernelConfig, SessionConfig, load_config
 from chaitya.core.event_bus import SqliteEventBus
 from chaitya.core.pipeline import AdapterHandler, PipelineOrchestrator
 from chaitya.core.protocols import EventBusProtocol, StoreProtocol
@@ -548,9 +545,17 @@ class Kernel:
         input_timeout_seconds: int = 300,
         event_bus: EventBusProtocol | None = None,
     ) -> None:
-        # Use config from parameters or load from file
+        # Build a default config if none provided (for programmatic use)
         if config is None:
-            config = load_config()  # Auto-load from ~/.chaitya/core.yaml
+            config = CoreConfig(
+                kernel=KernelConfig(cli_name=cli_name),
+                session=SessionConfig(
+                    backend=session_backend, stuck_threshold_seconds=stuck_threshold_seconds
+                ),
+                adapter_search_paths=adapter_search_paths or [],
+                enabled_adapters=enabled_adapters or [],
+                disabled_adapters=disabled_adapters or [],
+            )
         self._config = config
         self.cli_name = cli_name
         self._system_adapters = system_adapters or frozenset(config.system_adapters)
@@ -585,14 +590,18 @@ class Kernel:
         )
         self._pipeline = PipelineOrchestrator(overflow_dir=overflow_dir)
 
-        # Always include system adapters in enabled list, plus any config-specified ones
-        enabled = set(config.system_adapters)
+        # If config specifies enabled_adapters, include system adapters too
+        # Otherwise, leave empty to allow all (default behavior)
         if config.enabled_adapters:
+            enabled = set(config.system_adapters)
             enabled.update(config.enabled_adapters)
+            enabled_list = list(enabled)
+        else:
+            enabled_list = enabled_adapters or []
 
         self._registry = AdapterRegistry(
             search_paths=adapter_search_paths or config.adapter_search_paths,
-            enabled_adapters=list(enabled),
+            enabled_adapters=enabled_list,
             disabled_adapters=disabled_adapters or config.disabled_adapters,
         )
         self._pipeline._registry = self._registry  # type: ignore[attr-defined]
