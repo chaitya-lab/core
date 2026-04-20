@@ -97,6 +97,7 @@ class CoreConfig:
     adapter_search_paths: list[str] = field(default_factory=list)
     enabled_adapters: list[str] = field(default_factory=list)
     disabled_adapters: list[str] = field(default_factory=list)
+    adapter_options: dict[str, dict[str, Any]] = field(default_factory=dict)
     supported_contract_versions: list[str] = field(default_factory=lambda: ["1"])
     system_adapters: list[str] = field(default_factory=lambda: ["file", "shell"])
 
@@ -150,6 +151,7 @@ def _resolve_defaults() -> dict[str, Any]:
         "adapter_search_paths": [],
         "enabled_adapters": [],
         "disabled_adapters": [],
+        "adapter_options": {},
         "supported_contract_versions": ["1"],
         "system_adapters": ["file", "shell"],
     }
@@ -222,6 +224,7 @@ _ENV_MAP: dict[str, tuple[str, ...]] = {
     "CHAITYA_ADAPTER_PATHS": ("adapter_search_paths",),
     "CHAITYA_ENABLED_ADAPTERS": ("enabled_adapters",),
     "CHAITYA_DISABLED_ADAPTERS": ("disabled_adapters",),
+    "CHAITYA_ADAPTER_OPTIONS": ("adapter_options",),
 }
 
 # Fields that should be coerced to int
@@ -338,6 +341,7 @@ def load_config(
         adapter_search_paths=merged.get("adapter_search_paths", []),
         enabled_adapters=merged.get("enabled_adapters", []),
         disabled_adapters=merged.get("disabled_adapters", []),
+        adapter_options=merged.get("adapter_options", {}),
         supported_contract_versions=merged.get("supported_contract_versions", ["1"]),
         system_adapters=merged.get("system_adapters", []),
     )

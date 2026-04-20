@@ -429,3 +429,44 @@ Windows PowerShell:
 $env:CHAITYA_RUN_TMUX_TESTS = "1"
 pytest tests/test_tmux_backend.py tests/test_kernel_tmux_integration.py -q
 ```
+
+## Configuration
+
+Chaitya is configured via `~/.chaitya/core.yaml`. Key adapter settings:
+
+### Enable/Disable Adapters
+
+```yaml
+enabled_adapters:
+  - session
+  - browser
+
+disabled_adapters:
+  - watch
+```
+
+### Adapter Options
+
+Pass options to specific adapters:
+
+```yaml
+adapter_options:
+  browser:
+    headless: true
+    viewport_width: 1920
+    viewport_height: 1080
+  browser2:
+    daemon_session: my-browser
+  session:
+    stuck_threshold_seconds: 120
+```
+
+### Environment Variables
+
+Override config via environment variables:
+
+```bash
+CHAITYA_ENABLED_ADAPTERS=session,browser
+CHAITYA_DISABLED_ADAPTERS=watch
+CHAITYA_ADAPTER_OPTIONS='{"browser":{"headless":true}}'
+```
