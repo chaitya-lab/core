@@ -36,7 +36,7 @@ Kernel-dispatched commands (also available as core adapters in `adaptors/core/`)
 First-party adapters in this repository:
 
 - system adapters in `adaptors/core/`: `info`, `session`, `input`, `output`, `watch`, `file`, `shell`, `route`, `process`, `registry`
-- community adapters in `adaptors/community/`: `browser`, `browser2`, `config`, `desktop`, `gui`, `test`, `watchdog`
+- community adapters in `adaptors/community/`: `browser`, `browser2`, `config`, `desktop`, `gui`, `test`
 
 ## Mental Model
 
@@ -203,6 +203,7 @@ disabled_adapters:
 
 ## Documentation
 
+- [Docs Index](docs/README.md)
 - [Usage](docs/usage.md)
 - [Architecture](docs/architecture.md)
 - [Adapter Development](docs/adapters-dev.md)
@@ -216,7 +217,7 @@ disabled_adapters:
 
 The project is trying to stay small and understandable. If a feature can live in an adapter, put it in an adapter.
 
-Start with [CONTRIBUTING.md](CONTRIBUTING.md).
+Start with [Docs Index](docs/README.md) if you want a map of the docs, then read [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 

@@ -30,12 +30,11 @@ These are the repository's system adapters:
 These are optional extensions kept in this repository:
 
 - `browser` - Browser automation via Playwright
-- `browser2` - Alternative browser adapter
+- `browser2` - Daemon-based browser automation via Playwright and the event bus
 - `config` - Core and adapter config inspection/editing
 - `desktop` - Desktop automation helpers
 - `gui` - GUI control
 - `test` - Development and test helpers
-- `watchdog` - File watching experiments
 
 ## Discovery
 

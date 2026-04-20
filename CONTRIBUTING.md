@@ -39,6 +39,7 @@ adaptors/community/        Optional first-party and community adapters
 docs/                      User and architecture docs
 tests/                     Test suite
 tests/test_harness/        Fake terminal apps for testing
+tests/test_web/            Fake web server and browser adapter tests
 ```
 
 ## Working Rules
@@ -108,10 +109,12 @@ pytest tests/test_web -v
 
 The fake web test suite provides a local web server (port 18766) for testing browser adapters without external dependencies:
 
-- `test_web_server.py` - FastAPI server with multiple test pages (home, search, dashboard, chat, login, etc.)
+- `server.py` - FastAPI server with multiple test pages (home, search, dashboard, chat, login, tabs, scroll, slow, error, spa)
+- `pages/` - HTML page generators for deterministic browser scenarios
+- `shared.py` - Console capture and DOM event tracking helpers
 - Console capture - tracks console.log, console.warn, console.error from browser
 - DOM event tracking - captures clicks, inputs, form submissions
-- Useful for testing browser adapter commands: navigate, click, fill, evaluate, screenshot
+- Useful for testing browser adapter commands: navigate, click, fill, evaluate, screenshot, console, wait
 
 Run session backend integration tests when changing session behavior:
 
@@ -147,6 +150,12 @@ A good change should make it easy to answer:
 - how it was tested
 - whether there are platform-specific notes
 - which public docs were updated
+
+Before opening a PR, check:
+
+- the user-facing command examples still match the current CLI surface
+- adapter lists still match the directories that actually exist under `adaptors/`
+- test docs still match the files and fixtures in `tests/test_harness/` and `tests/test_web/`
 
 ## Style
 

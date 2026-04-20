@@ -87,6 +87,8 @@ SQLite is the only built-in store today.
 
 The current event bus implementation is also SQLite-backed.
 
+In current builds it also supports cross-process request and response flows for daemon-style adapters. This is the pattern used by `browser2`: a CLI adapter emits request events, a long-lived daemon processes them, and the caller waits for the matching response event.
+
 ### `PipelineOrchestrator`
 
 `src/chaitya/core/pipeline.py` handles:
@@ -161,7 +163,6 @@ Optional first-party/community adapters in `adaptors/community/`:
 - `desktop`
 - `gui`
 - `test`
-- `watchdog`
 
 The category matters operationally: core/system adapters are part of the normal kernel surface, while community adapters are optional extensions.
 

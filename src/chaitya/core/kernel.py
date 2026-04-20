@@ -111,27 +111,33 @@ def _configure_kernel_logging(log_file: str = "", log_level: str = "info") -> No
     """
     global _kernel_log_path
 
-    if log_file:
-        _kernel_log_path = Path(log_file).expanduser()
-        _kernel_log_path.parent.mkdir(parents=True, exist_ok=True)
-    else:
-        _kernel_log_path = _KERNEL_LOG_DIR / "kernel.log"
-        _KERNEL_LOG_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        if log_file:
+            _kernel_log_path = Path(log_file).expanduser()
+            _kernel_log_path.parent.mkdir(parents=True, exist_ok=True)
+        else:
+            _kernel_log_path = _KERNEL_LOG_DIR / "kernel.log"
+            _KERNEL_LOG_DIR.mkdir(parents=True, exist_ok=True)
 
-    handler = logging.FileHandler(_kernel_log_path)
-    level_map = {
-        "debug": logging.DEBUG,
-        "info": logging.INFO,
-        "warning": logging.WARNING,
-        "error": logging.ERROR,
-    }
-    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
-    logger.addHandler(handler)
-    logger.setLevel(level_map.get(log_level.lower(), logging.INFO))
+        handler = logging.FileHandler(_kernel_log_path)
+        level_map = {
+            "debug": logging.DEBUG,
+            "info": logging.INFO,
+            "warning": logging.WARNING,
+            "error": logging.ERROR,
+        }
+        handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
+        logger.addHandler(handler)
+        logger.setLevel(level_map.get(log_level.lower(), logging.INFO))
+    except OSError:
+        pass  # Skip file logging if directory can't be created
 
 
-# Call once at module load with defaults
-_configure_kernel_logging()
+# Call once at module load with defaults (gracefully skips if home dir unavailable)
+try:
+    _configure_kernel_logging()
+except OSError:
+    pass  # Skip import-time logging in restricted environments
 
 _KERNEL_COMMAND_CONTRACTS: dict[str, dict] = {
     "info": {

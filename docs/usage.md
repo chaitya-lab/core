@@ -2,6 +2,15 @@
 
 This guide covers the current CLI surface and the most useful workflows.
 
+## Start Here
+
+If you are new to the project, read in this order:
+
+1. this page for installation and day-to-day CLI usage
+2. `adaptors/README.md` for what is available in this repository
+3. `docs/adapters-dev.md` if you want to build your own adapter
+4. `CONTRIBUTING.md` if you want to work on the repository itself
+
 ## Install
 
 ### macOS/Linux
@@ -197,7 +206,7 @@ chaitya input --file data.csv | chaitya shell run --command "grep pattern"
 Repository adapter layout:
 
 - `adaptors/core/`: `file`, `shell`, `route`, `process`, `registry`
-- `adaptors/community/`: `browser`, `browser2`, `config`, `desktop`, `gui`, `test`, `watchdog`
+- `adaptors/community/`: `browser`, `browser2`, `config`, `desktop`, `gui`, `test`
 
 ### File
 
@@ -271,6 +280,47 @@ chaitya config set kernel.log_level debug
 chaitya config list
 chaitya config list browser
 chaitya config paths
+```
+
+### Browser
+
+The `browser` adapter controls a local Playwright browser in-process.
+
+```bash
+chaitya browser launch --headless
+chaitya browser navigate --url https://example.com
+chaitya browser click --selector "text=More information"
+chaitya browser screenshot --path /tmp/example.png
+chaitya browser console
+chaitya browser wait --seconds 1
+chaitya browser close
+```
+
+Other useful browser commands:
+
+- `search`
+- `fill`
+- `press`
+- `evaluate`
+- `inner-text`
+- `inner-html`
+- `wait-for-selector`
+- `select`
+- `check`
+- `title`
+- `url`
+
+### Browser2
+
+The `browser2` adapter uses a persistent daemon session and the event bus for cross-process request and response handling.
+
+```bash
+chaitya browser2 launch --headless
+chaitya browser2 navigate --url https://example.com
+chaitya browser2 inner-text --selector "h1"
+chaitya browser2 console
+chaitya browser2 wait --seconds 1
+chaitya browser2 close
 ```
 
 ## Pipelines
@@ -351,6 +401,18 @@ Full suite:
 
 ```bash
 pytest tests -q
+```
+
+Fake terminal harness:
+
+```bash
+pytest tests/test_harness -v
+```
+
+Fake web browser tests:
+
+```bash
+pytest tests/test_web -v
 ```
 
 tmux or psmux integration tests:
