@@ -336,25 +336,39 @@ chaitya shell run --command "printf 'ok\n'" | chaitya route --if-pattern ok
 
 ## Configuration
 
-Default config path:
+Chaitya loads configuration from a YAML file with this priority (highest first):
 
-```text
-~/.chaitya/core.yaml
+1. Environment variables (`CHAITYA_*`)
+2. Config file (default: `~/.chaitya/core.yaml`)
+3. Built-in defaults
+
+If no config file exists at the default location, Chaitya uses built-in defaults. This is fine — you don't need a config file to get started.
+
+### Default Paths
+
+| Path | Default |
+|------|---------|
+| Config | `~/.chaitya/core.yaml` |
+| Database | `~/.chaitya/chaitya.db` |
+| Templates | `~/.chaitya/templates/` |
+| Adapter configs | `~/.chaitya/adapters/` |
+
+### Using a Custom Config File
+
+Override the config file location:
+
+```bash
+chaitya --config /path/to/my/core.yaml info
 ```
 
-Default database path:
+Or use environment variable:
 
-```text
-~/.chaitya/chaitya.db
+```bash
+export CHAITYA_CONFIG=/path/to/my/core.yaml
+chaitya info
 ```
 
-Default templates path:
-
-```text
-~/.chaitya/templates/
-```
-
-Example configuration:
+### Example Configuration
 
 ```yaml
 kernel:
@@ -377,18 +391,23 @@ disabled_adapters:
   - browser2
 ```
 
-Useful environment variables:
+### Environment Variables
 
-- `CHAITYA_CLI_NAME`
-- `CHAITYA_DB_PATH`
-- `CHAITYA_SESSION_BACKEND`
-- `CHAITYA_TEMPLATES_DIR`
-- `CHAITYA_ADAPTERS_CONFIG_DIR`
-- `CHAITYA_ADAPTER_PATHS`
-- `CHAITYA_ENABLED_ADAPTERS`
-- `CHAITYA_DISABLED_ADAPTERS`
-- `CHAITYA_DEBUG_LOG`
-- `CHAITYA_LOG_LEVEL`
+Available overrides:
+
+| Variable | Config Path |
+|----------|-------------|
+| `CHAITYA_CONFIG` | Custom config file path |
+| `CHAITYA_CLI_NAME` | `kernel.cli_name` |
+| `CHAITYA_DB_PATH` | `store.path` |
+| `CHAITYA_SESSION_BACKEND` | `session.backend` |
+| `CHAITYA_TEMPLATES_DIR` | Top-level |
+| `CHAITYA_ADAPTERS_CONFIG_DIR` | Top-level |
+| `CHAITYA_ADAPTER_PATHS` | `adapter_search_paths` |
+| `CHAITYA_ENABLED_ADAPTERS` | `enabled_adapters` |
+| `CHAITYA_DISABLED_ADAPTERS` | `disabled_adapters` |
+| `CHAITYA_DEBUG_LOG` | `kernel.debug_log` |
+| `CHAITYA_LOG_LEVEL` | `kernel.log_level` |
 
 `CHAITYA_ADAPTER_PATHS` uses the platform path separator:
 

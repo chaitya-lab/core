@@ -159,27 +159,38 @@ chaitya session send-input default Alice --newline
 
 ## Configuration
 
-By default Chaitya uses:
+Chaitya loads configuration from a YAML file with this priority (highest first):
 
-- config: `~/.chaitya/core.yaml`
-- database: `~/.chaitya/chaitya.db`
-- templates: `~/.chaitya/templates/`
-- adapter configs: `~/.chaitya/adapters/`
+1. Environment variables (`CHAITYA_*`)
+2. Config file (`~/.chaitya/core.yaml` by default)
+3. Built-in defaults
 
-Important environment variables:
+If no config file exists at the default location, Chaitya uses built-in defaults. You don't need a config file to get started.
 
-- `CHAITYA_CLI_NAME`
-- `CHAITYA_DB_PATH`
-- `CHAITYA_SESSION_BACKEND`
-- `CHAITYA_TEMPLATES_DIR`
-- `CHAITYA_ADAPTERS_CONFIG_DIR`
-- `CHAITYA_ADAPTER_PATHS`
-- `CHAITYA_ENABLED_ADAPTERS`
-- `CHAITYA_DISABLED_ADAPTERS`
-- `CHAITYA_DEBUG_LOG`
-- `CHAITYA_LOG_LEVEL`
+### Default Paths
 
-Example `core.yaml`:
+| Path | Default |
+|------|---------|
+| Config | `~/.chaitya/core.yaml` |
+| Database | `~/.chaitya/chaitya.db` |
+| Templates | `~/.chaitya/templates/` |
+| Adapter configs | `~/.chaitya/adapters/` |
+
+### Using a Custom Config File
+
+Override with `--config` flag:
+
+```bash
+chaitya --config /path/to/my/core.yaml info
+```
+
+Or environment variable `CHAITYA_CONFIG`:
+
+```bash
+CHAITYA_CONFIG=/path/to/my/core.yaml chaitya info
+```
+
+### Example Configuration
 
 ```yaml
 kernel:
@@ -197,9 +208,47 @@ templates_dir: ~/.chaitya/templates
 adapters_config_dir: ~/.chaitya/adapters
 adapter_search_paths:
   - /abs/path/to/my-adapters
+
+enabled_adapters:
+  - session
+  - browser
+  - browser2
+
 disabled_adapters:
   - browser2
+
+adapter_options:
+  browser:
+    headless: true
+    viewport_width: 1920
 ```
+
+### Programmatic Use
+
+Use Chaitya Core as a library in your Python code:
+
+```python
+from chaitya.core import Kernel
+from chaitya.core.config import load_config
+
+# Load from default location (~/.chaitya/core.yaml)
+config = load_config()
+kernel = Kernel(config=config)
+
+# Use a custom config file
+config = load_config("/path/to/my/core.yaml")
+kernel = Kernel(config=config)
+
+# Or pass config dict directly
+kernel = Kernel(config={"kernel": {"log_level": "debug"}})
+```
+
+The `Kernel` class provides:
+
+- `run(command)` — Execute a command expression
+- `adapters` — Registry of loaded adapters
+- `store` — SQLite-backed persistence
+- `event_bus` — Event streaming
 
 ## Documentation
 

@@ -286,22 +286,36 @@ def load_config(
 ) -> CoreConfig:
     """Load, merge, and freeze configuration.
 
-    Priority: env vars > YAML file > defaults.
+    Priority (highest first):
+      1. Environment variables (CHAITYA_*)
+      2. Config file (--config path or CHAITYA_CONFIG env var)
+      3. Default config file (~/.chaitya/core.yaml)
+      4. Built-in defaults
 
     Parameters
     ----------
     config_path
-        Path to ``core.yaml``.  Defaults to ``~/.chaitya/core.yaml``.
+        Path to ``core.yaml``.  If not provided, checks ``CHAITYA_CONFIG``
+        env var, then uses default ``~/.chaitya/core.yaml``.
     """
     # 1. Defaults
     merged = _resolve_defaults()
 
     # 2. YAML overlay
+    # Priority: explicit config_path > CHAITYA_CONFIG env var > default location
     if config_path is None:
-        config_path = _default_chaitya_dir() / "core.yaml"
-    yaml_data = _load_yaml_file(Path(config_path))
-    if yaml_data:
-        merged = _deep_merge(merged, yaml_data)
+        config_path = os.environ.get("CHAITYA_CONFIG")
+        if config_path is not None:
+            config_path = Path(config_path)
+        else:
+            default_path = _default_chaitya_dir() / "core.yaml"
+            if default_path.is_file():
+                config_path = default_path
+
+    if config_path is not None:
+        yaml_data = _load_yaml_file(Path(config_path))
+        if yaml_data:
+            merged = _deep_merge(merged, yaml_data)
 
     # 3. Env-var overlay (highest priority)
     merged = _apply_env_overrides(merged)
