@@ -28,6 +28,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+import chaitya
+
 from chaitya_sdk.context import (
     _configure_permissions,
     event_bus as sdk_event_bus,
@@ -603,6 +605,7 @@ class Kernel:
             search_paths=adapter_search_paths or config.adapter_search_paths,
             enabled_adapters=enabled_list,
             disabled_adapters=disabled_adapters or config.disabled_adapters,
+            kernel_version=chaitya.__version__,
         )
         self._pipeline._registry = self._registry  # type: ignore[attr-defined]
 

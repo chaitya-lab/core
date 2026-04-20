@@ -37,6 +37,7 @@ from chaitya.core.types import (
     ResourceLimits,
     ValidationResult,
 )
+from chaitya.core.version import check_compatibility, format_error
 
 logger = logging.getLogger(__name__)
 
@@ -287,10 +288,12 @@ class AdapterRegistry:
         search_paths: list[str] | None = None,
         enabled_adapters: list[str] | None = None,
         disabled_adapters: list[str] | None = None,
+        kernel_version: str = "0.1.0a1",
     ) -> None:
         self._loaded: dict[str, AdapterPackage] = {}
         self._handlers: dict[str, Callable] = {}
         self._search_paths: list[str] = list(search_paths or [])
+        self._kernel_version = kernel_version
 
         env_enabled = os.environ.get("CHAITYA_ENABLED_ADAPTERS", "")
         env_enabled_list = [a.strip() for a in env_enabled.split(",") if a.strip()]
@@ -648,6 +651,13 @@ class AdapterRegistry:
         if package.name in self.loaded_names:
             package.status = AdapterStatus.REJECTED
             package.error = f"Name collision: adapter '{package.name}' is already loaded."
+            raise AdapterLoadError(package.name, package.error)
+
+        # Check core version compatibility
+        requires_core = package.contract.requires_core or ""
+        if not check_compatibility(requires_core, self._kernel_version):
+            package.status = AdapterStatus.REJECTED
+            package.error = format_error(requires_core, self._kernel_version)
             raise AdapterLoadError(package.name, package.error)
 
         result = self.validate(package)

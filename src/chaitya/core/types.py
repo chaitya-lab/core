@@ -371,6 +371,7 @@ class AdapterContract:
     """
 
     contract_version: str = "1"
+    requires_core: str = ""  # Semver spec: "^0.1.0", ">=0.1.0", or "0.1.0"
     name: str = ""
     description: str = ""
     depends_on: list[str] = field(default_factory=list)
